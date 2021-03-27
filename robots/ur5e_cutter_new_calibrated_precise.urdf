@@ -73,7 +73,7 @@
     <visual>
       <origin rpy="0 0 3.14159265359" xyz="0 0 0"/>
       <geometry>
-        <mesh filename="/home/main/python/pybullet/robots/ur5e/visual/base.dae"/>
+        <mesh filename="ur5e/visual/base.dae"/>
       </geometry>
       <material name="LightGrey">
         <color rgba="0.7 0.7 0.7 1.0"/>
@@ -82,7 +82,7 @@
     <collision>
       <origin rpy="0 0 3.14159265359" xyz="0 0 0"/>
       <geometry>
-        <mesh filename="/home/main/python/pybullet/robots/ur5e/collision/base.stl"/>
+        <mesh filename="ur5e/collision/base.stl"/>
       </geometry>
     </collision>
     <inertial>
@@ -103,7 +103,7 @@
     <visual>
       <origin rpy="0 0 3.14159265359" xyz="0 0 0"/>
       <geometry>
-        <mesh filename="/home/main/python/pybullet/robots/ur5e/visual/shoulder.dae"/>
+        <mesh filename="ur5e/visual/shoulder.dae"/>
       </geometry>
       <material name="LightGrey">
         <color rgba="0.7 0.7 0.7 1.0"/>
@@ -112,7 +112,7 @@
     <collision>
       <origin rpy="0 0 3.14159265359" xyz="0 0 0"/>
       <geometry>
-        <mesh filename="/home/main/python/pybullet/robots/ur5e/collision/shoulder.stl"/>
+        <mesh filename="ur5e/collision/shoulder.stl"/>
       </geometry>
     </collision>
     <inertial>
@@ -133,7 +133,7 @@
     <visual>
       <origin rpy="1.57079632679 0 -1.57079632679" xyz="0 0 0.138"/>
       <geometry>
-        <mesh filename="/home/main/python/pybullet/robots/ur5e/visual/upperarm.dae"/>
+        <mesh filename="ur5e/visual/upperarm.dae"/>
       </geometry>
       <material name="LightGrey">
         <color rgba="0.7 0.7 0.7 1.0"/>
@@ -142,7 +142,7 @@
     <collision>
       <origin rpy="1.57079632679 0 -1.57079632679" xyz="0 0 0.138"/>
       <geometry>
-        <mesh filename="/home/main/python/pybullet/robots/ur5e/collision/upperarm.stl"/>
+        <mesh filename="ur5e/collision/upperarm.stl"/>
       </geometry>
     </collision>
     <inertial>
@@ -163,7 +163,7 @@
     <visual>
       <origin rpy="1.57079632679 0 -1.57079632679" xyz="0 0 0.007"/>
       <geometry>
-        <mesh filename="/home/main/python/pybullet/robots/ur5e/visual/forearm.dae"/>
+        <mesh filename="ur5e/visual/forearm.dae"/>
       </geometry>
       <material name="LightGrey">
         <color rgba="0.7 0.7 0.7 1.0"/>
@@ -172,7 +172,7 @@
     <collision>
       <origin rpy="1.57079632679 0 -1.57079632679" xyz="0 0 0.007"/>
       <geometry>
-        <mesh filename="/home/main/python/pybullet/robots/ur5e/collision/forearm.stl"/>
+        <mesh filename="ur5e/collision/forearm.stl"/>
       </geometry>
     </collision>
     <inertial>
@@ -193,7 +193,7 @@
     <visual>
       <origin rpy="1.57079632679 0 0" xyz="0 0 -0.127"/>
       <geometry>
-        <mesh filename="/home/main/python/pybullet/robots/ur5e/visual/wrist1.dae"/>
+        <mesh filename="ur5e/visual/wrist1.dae"/>
       </geometry>
       <material name="LightGrey">
         <color rgba="0.7 0.7 0.7 1.0"/>
@@ -202,7 +202,7 @@
     <collision>
       <origin rpy="1.57079632679 0 0" xyz="0 0 -0.127"/>
       <geometry>
-        <mesh filename="/home/main/python/pybullet/robots/ur5e/collision/wrist1.stl"/>
+        <mesh filename="ur5e/collision/wrist1.stl"/>
       </geometry>
     </collision>
     <inertial>
@@ -223,7 +223,7 @@
     <visual>
       <origin rpy="0 0 0" xyz="0 0 -0.0997"/>
       <geometry>
-        <mesh filename="/home/main/python/pybullet/robots/ur5e/visual/wrist2.dae"/>
+        <mesh filename="ur5e/visual/wrist2.dae"/>
       </geometry>
       <material name="LightGrey">
         <color rgba="0.7 0.7 0.7 1.0"/>
@@ -232,7 +232,7 @@
     <collision>
       <origin rpy="0 0 0" xyz="0 0 -0.0997"/>
       <geometry>
-        <mesh filename="/home/main/python/pybullet/robots/ur5e/collision/wrist2.stl"/>
+        <mesh filename="ur5e/collision/wrist2.stl"/>
       </geometry>
     </collision>
     <inertial>
@@ -253,7 +253,7 @@
     <visual>
       <origin rpy="1.57079632679 0 0" xyz="0 0 -0.0989"/>
       <geometry>
-        <mesh filename="/home/main/python/pybullet/robots/ur5e/visual/wrist3.dae"/>
+        <mesh filename="ur5e/visual/wrist3.dae"/>
       </geometry>
       <material name="LightGrey">
         <color rgba="0.7 0.7 0.7 1.0"/>
@@ -262,7 +262,7 @@
     <collision>
       <origin rpy="1.57079632679 0 0" xyz="0 0 -0.0989"/>
       <geometry>
-        <mesh filename="/home/main/python/pybullet/robots/ur5e/collision/wrist3.stl"/>
+        <mesh filename="ur5e/collision/wrist3.stl"/>
       </geometry>
     </collision>
     <inertial>
@@ -362,7 +362,7 @@
     <visual>
       <origin rpy="0 0 0" xyz="0 0 0"/>
       <geometry>
-        <mesh filename="/home/main/python/pybullet/robots/ur5e/visual/camera_mount.dae" scale="1.0 1.0 1.0"/>
+        <mesh filename="ur5e/visual/camera_mount.dae" scale="1.0 1.0 1.0"/>
       </geometry>
       <material name="LightGrey"/>
     </visual>
@@ -392,7 +392,7 @@
     <visual>
       <origin rpy="0 0 0" xyz="0 0 0.006"/>
       <geometry>
-        <mesh filename="/home/main/python/pybullet/robots/ur5e/visual/new_cutter.dae" scale="1.0 1.0 1.0"/>
+        <mesh filename="ur5e/visual/new_cutter.dae" scale="1.0 1.0 1.0"/>
       </geometry>
       <material name="LightGrey"/>
     </visual>

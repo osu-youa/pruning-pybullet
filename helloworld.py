@@ -2,7 +2,8 @@ import pybullet as pb
 import time
 import pybullet_data
 import numpy as np
-from ipdb import set_trace
+import os
+# from ipdb import set_trace
 
 joint_indexes = []
 
@@ -96,7 +97,7 @@ class URDFRobot:
 
 if __name__ == '__main__':
     # arm_location = '/home/main/catkin_ws/src/FREDS-MP/fredsmp_utils/robots/ur5/ur5e_cutter_new_mounted_calibrated_precise.urdf'
-    arm_location = 'robots/ur5e_cutter_new_calibrated_precise.urdf'
+    arm_location = os.path.join('robots', 'ur5e_cutter_new_calibrated_precise.urdf')
 
 
     # Find camera parameters
@@ -105,7 +106,7 @@ if __name__ == '__main__':
         aspect=848/480,
         nearVal=0.1,
         farVal=3.1)
-    # TODO: Find Intrinsic Parameters for D435
+    # TODO: Confirm Intrinsic Parameters for D435
 
     # Environment setup
     physicsClient = pb.connect(pb.GUI)#or p.DIRECT for non-graphical version
@@ -141,15 +142,15 @@ if __name__ == '__main__':
 
         # print('{} steps elapsed'.format(i))
 
-        # Compute the camera view matrix and update the corresponding image
-        view_matrix = robot.get_z_offset_view_matrix('camera_mount')
-        # view_matrix = pb.computeViewMatrix(cameraEyePosition=[1, 0.5, 0.5], cameraTargetPosition=[0, 0.5, 0.5], cameraUpVector=[0, 0, 1])
-
-        width, height, rgbImg, depthImg, segImg = pb.getCameraImage(
-            width=212,
-            height=120,
-            viewMatrix=view_matrix,
-            projectionMatrix=projectionMatrix)
+        # # Compute the camera view matrix and update the corresponding image
+        # view_matrix = robot.get_z_offset_view_matrix('camera_mount')
+        # # view_matrix = pb.computeViewMatrix(cameraEyePosition=[1, 0.5, 0.5], cameraTargetPosition=[0, 0.5, 0.5], cameraUpVector=[0, 0, 1])
+        #
+        # width, height, rgbImg, depthImg, segImg = pb.getCameraImage(
+        #     width=212,
+        #     height=120,
+        #     viewMatrix=view_matrix,
+        #     projectionMatrix=projectionMatrix)
 
         # Compute the new IKs to move the robot
         frame_goal = DESIRED_STEP * i
