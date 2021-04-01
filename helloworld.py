@@ -76,9 +76,13 @@ class URDFRobot:
                                     cameraUpVector=[0, 0, 1])
 
 
-    def solve_end_effector_ik(self, link_name_or_id, target_position):
+    def solve_end_effector_ik(self, link_name_or_id, target_position, target_orientation=None):
         link_id = self.convert_link_name(link_name_or_id)
-        return pb.calculateInverseKinematics(self.robot_id, link_id, targetPosition=target_position)
+        kwargs = {'targetPosition': target_position}
+        if target_orientation is not None:
+            kwargs['targetOrientation'] = target_orientation
+        return pb.calculateInverseKinematics(self.robot_id, link_id, **kwargs)
+
 
     # def solve_end_effector_change_ik(self, link_name_or_id, desired_change):
     #
@@ -96,6 +100,9 @@ class URDFRobot:
 
 
 if __name__ == '__main__':
+
+    DEBUG = False
+
     # arm_location = '/home/main/catkin_ws/src/FREDS-MP/fredsmp_utils/robots/ur5/ur5e_cutter_new_mounted_calibrated_precise.urdf'
     arm_location = os.path.join('robots', 'ur5e_cutter_new_calibrated_precise.urdf')
 
@@ -123,49 +130,63 @@ if __name__ == '__main__':
     robot.reset_joint_states(home_joints)
 
     # Load in other objects in the environment
-    tree_id = pb.loadURDF('models/test_tree.urdf', [0, 0.85, 0], [0, 0, 0, 1], globalScaling=1.5)
-    branch_id = pb.loadURDF('models/test_branch.urdf', [0, 0.85, 1.8])
-    pb.createSoftBodyAnchor(branch_id, 0, -1, -1)
+    tree_id = pb.loadURDF('models/trellis-model.urdf', [0, 0.875, 0], [0, 0, 0.7071, 0.7071], globalScaling=1.35)
+    # branch_id = pb.loadURDF('models/test_branch.urdf', [0, 0.85, 1.8])
+    # pb.createSoftBodyAnchor(branch_id, 0, -1, -1)
 
     # Initialize stuff for simulation
     DESIRED_VELOCITY = np.array([0, 0, 0.05])
     DESIRED_STEP = DESIRED_VELOCITY / 240
 
-    tf = robot.get_link_kinematics('cutpoint', use_com_frame=False, as_matrix=True)
+
     #     homog = np.array([0, 0, 0, 1])
     #     homog[:3] = desired_change
     #     target_position = (tf @ homog)[:3]
 
-    # Main simulation loop
-    for i in range (10000):
+    # Starting
+    start_pos, start_orientation = robot.get_link_kinematics('cutpoint')
+    state_id = pb.saveState()
+
+    for z_offset in np.linspace(0, 0.20, 50, endpoint=False):
+
+        print('Working on Z-Offset {:.4f}'.format(z_offset))
+        pb.restoreState(stateId=state_id)
+        desired_start_pos = np.array(start_pos) + np.array([0, 0, z_offset])
+        ik = robot.solve_end_effector_ik('cutpoint', desired_start_pos, start_orientation)
+        robot.reset_joint_states(ik)
+        tf = robot.get_link_kinematics('cutpoint', use_com_frame=False, as_matrix=True)
+
+        # Main simulation loop
+        for i in range (500):
 
 
-        # print('{} steps elapsed'.format(i))
+            # print('{} steps elapsed'.format(i))
 
-        # # Compute the camera view matrix and update the corresponding image
-        # view_matrix = robot.get_z_offset_view_matrix('camera_mount')
-        # # view_matrix = pb.computeViewMatrix(cameraEyePosition=[1, 0.5, 0.5], cameraTargetPosition=[0, 0.5, 0.5], cameraUpVector=[0, 0, 1])
-        #
-        # width, height, rgbImg, depthImg, segImg = pb.getCameraImage(
-        #     width=212,
-        #     height=120,
-        #     viewMatrix=view_matrix,
-        #     projectionMatrix=projectionMatrix)
+            # # Compute the camera view matrix and update the corresponding image
+            # view_matrix = robot.get_z_offset_view_matrix('camera_mount')
+            # # view_matrix = pb.computeViewMatrix(cameraEyePosition=[1, 0.5, 0.5], cameraTargetPosition=[0, 0.5, 0.5], cameraUpVector=[0, 0, 1])
+            #
+            # width, height, rgbImg, depthImg, segImg = pb.getCameraImage(
+            #     width=212,
+            #     height=120,
+            #     viewMatrix=view_matrix,
+            #     projectionMatrix=projectionMatrix)
 
-        # Compute the new IKs to move the robot
-        frame_goal = DESIRED_STEP * i
-        homog = np.array([0., 0., 0., 1.])
-        homog[:3] = frame_goal
-        target_position = (tf @ homog)[:3]
+            # Compute the new IKs to move the robot
+            frame_goal = DESIRED_STEP * i
+            homog = np.array([0., 0., 0., 1.])
+            homog[:3] = frame_goal
+            target_position = (tf @ homog)[:3]
 
-        ik = robot.solve_end_effector_ik('cutpoint', target_position)
-        robot.set_control_target(ik)
-        if not i % 240:
-            pos, _ = robot.get_link_kinematics('cutpoint')
-            print('Step {}:\nTarget: ({:.3f}, {:.3f}, {:.3f})\nActual: ({:.3f}, {:.3f}, {:.3f})'.format(i, *target_position, *pos))
+            ik = robot.solve_end_effector_ik('cutpoint', target_position, start_orientation)
+            robot.set_control_target(ik)
+            if not i % 240 and DEBUG:
+                start_pos, _ = robot.get_link_kinematics('cutpoint')
+                print('Step {}:\nTarget: ({:.3f}, {:.3f}, {:.3f})\nActual: ({:.3f}, {:.3f}, {:.3f})'.format(i, *target_position, *start_pos))
 
-        time.sleep(1. / 240.)
-        pb.stepSimulation()
+            time.sleep(1. / 240.)
+            pb.stepSimulation()
+
 
     pb.disconnect()
 

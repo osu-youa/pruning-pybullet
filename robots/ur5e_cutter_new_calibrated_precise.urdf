@@ -39,21 +39,23 @@
   <link name="mount">
     <visual>
 <!--	  <origin rpy="0.0 0.0 0.0" xyz="-0.02 0.0 0.0"/>-->
-	  <origin rpy="0.0 0.0 0.0" xyz="0 0.0 0.375"/>
+	  <origin rpy="0.0 0.0 0.0" xyz="0 0.0 0.0"/>
       <geometry>
-<!--        <box size="0.04 0.5 0.5"/>-->
-        <box size="0.5 0.5 0.75"/>
+        <mesh filename="ur5e/visual/robot_cart.obj"/>
       </geometry>
+      <material name="LightGrey">
+        <color rgba="0.7 0.7 0.7 1.0"/>
+      </material>
       <material name="LightGrey">
         <color rgba="0.7 0.7 0.7 1.0"/>
       </material>
     </visual>
     <collision>
 <!--	  <origin rpy="0.0 0.0 0.0" xyz="-0.02 0.0 0.0"/>-->
-	  <origin rpy="0.0 0.0 0.0" xyz="0 0.0 -0.02"/>
+	  <origin rpy="0.0 0.0 0.0" xyz="0 0.0 -0.3786"/>
       <geometry>
 <!--        <box size="0.04 0.5 0.5"/>-->
-        <box size="0.5 0.5 0.75"/>
+        <box size="0.5 0.5 0.75711"/>
       </geometry>
     </collision>
     <inertial>
@@ -66,7 +68,7 @@
     <parent link="mount"/>
     <child link="base_link"/>
 <!--    <origin rpy="0.0 1.570796 0.0" xyz="0.0 0.0 0.0"/>-->
-    <origin rpy="0.0 0.0 0.0" xyz="0.0 0.0 0.75"/>
+    <origin rpy="0.0 0.0 -1.5708" xyz="0.0 0.0 0.0"/>
     <axis xyz="0 0 1"/>
   </joint>
   <link name="base_link">
@@ -397,6 +399,12 @@
       <material name="LightGrey"/>
     </visual>
 
+     <collision>
+      <origin rpy="0 0 0" xyz="0 0 0.006"/>
+      <geometry>
+        <mesh filename="ur5e/collision/new_cutter.stl" scale="1.0 1.0 1.0"/>
+      </geometry>
+    </collision>
 
         <!-- Tool/cutter collision-->
 
@@ -417,37 +425,37 @@
 <!--          </geometry>-->
 <!--        </collision>-->
 
-        <!-- Box for the battery pack thing -->
-        <collision>
-              <origin xyz="-0.09197 -0.01500 -0.15356" rpy="0 0 0" />
-              <geometry>
-                <box size="0.07 0.084 0.06" />
-              </geometry>
-        </collision>
+<!--        &lt;!&ndash; Box for the battery pack thing &ndash;&gt;-->
+<!--        <collision>-->
+<!--              <origin xyz="-0.09197 -0.01500 -0.15356" rpy="0 0 0" />-->
+<!--              <geometry>-->
+<!--                <box size="0.07 0.084 0.06" />-->
+<!--              </geometry>-->
+<!--        </collision>-->
 
-<!--        &lt;!&ndash; Updated cylinder - drawn to be thinner, more precise &ndash;&gt;-->
-        <collision>
-          <origin xyz="-0.09215 0 -0.0120" rpy="0 0 0" />
-          <geometry>
-            <cylinder radius="0.021" length="0.230" />
-          </geometry>
-        </collision>
+<!--&lt;!&ndash;        &lt;!&ndash; Updated cylinder - drawn to be thinner, more precise &ndash;&gt;&ndash;&gt;-->
+<!--        <collision>-->
+<!--          <origin xyz="-0.09215 0 -0.0120" rpy="0 0 0" />-->
+<!--          <geometry>-->
+<!--            <cylinder radius="0.021" length="0.230" />-->
+<!--          </geometry>-->
+<!--        </collision>-->
 
-        <!-- Boxes for the clamp - Tightly drawn -->
+<!--        &lt;!&ndash; Boxes for the clamp - Tightly drawn &ndash;&gt;-->
 
-        <collision>
-              <origin xyz="-0.08340 0 -0.03650" rpy="0 0 0" />
-              <geometry>
-                <box size="0.072 0.084 0.04" />
-              </geometry>
-        </collision>
+<!--        <collision>-->
+<!--              <origin xyz="-0.08340 0 -0.03650" rpy="0 0 0" />-->
+<!--              <geometry>-->
+<!--                <box size="0.072 0.084 0.04" />-->
+<!--              </geometry>-->
+<!--        </collision>-->
 
-        <collision>
-              <origin xyz="-0.05740 0 -0.014" rpy="0 0 0" />
-              <geometry>
-                <box size="0.02 0.05 0.08" />
-              </geometry>
-        </collision>
+<!--        <collision>-->
+<!--              <origin xyz="-0.05740 0 -0.014" rpy="0 0 0" />-->
+<!--              <geometry>-->
+<!--                <box size="0.02 0.05 0.08" />-->
+<!--              </geometry>-->
+<!--        </collision>-->
 
 
 
@@ -523,7 +531,7 @@
   <joint name="world_joint" type="fixed">
     <parent link="world"/>
     <child link="mount_base"/>
-    <origin rpy="0.0 0.0 0.0" xyz="0.0 0.0 0.0"/>
+    <origin rpy="0.0 0.0 1.5708" xyz="0.0 0.0 0.75711"/>
   </joint>
 </robot>
 
