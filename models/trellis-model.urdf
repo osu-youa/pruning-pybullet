@@ -4,13 +4,13 @@
   <link concave="no" name="baseLink">
     <inertial>
       <origin rpy="0 0 0" xyz="0 0 0"/>
-       <mass value=".0"/>
+       <mass value="10.0"/>
        <inertia ixx="0" ixy="0" ixz="0" iyy="0" iyz="0" izz="0"/>
     </inertial>
     <visual>
       <origin rpy="0 0 0" xyz="0 0 0"/>
       <geometry>
-				<mesh filename="trellis-model.obj" scale="1 1 1"/>
+				<mesh filename="trellis-model-rect.obj" scale="1 1 1"/>
       </geometry>
        <material name="white">
         <color rgba="1 1 1 1"/>
@@ -20,7 +20,7 @@
 <!--    <collision concave="yes">-->
       <origin rpy="0 0 0" xyz="0 0 0"/>
      <geometry>
-				<mesh filename="trellis-model.obj" scale="1 1 1"/>
+				<mesh filename="trellis-model-rect.obj" scale="1 1 1"/>
       </geometry>
     </collision>
   </link>
