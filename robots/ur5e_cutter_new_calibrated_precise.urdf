@@ -402,7 +402,7 @@
      <collision>
       <origin rpy="0 0 0" xyz="0 0 0.006"/>
       <geometry>
-        <mesh filename="ur5e/collision/new_cutter.stl" scale="1.0 1.0 1.0"/>
+        <mesh filename="ur5e/collision/new_cutter_decimated.stl" scale="1.0 1.0 1.0"/>
       </geometry>
     </collision>
 
