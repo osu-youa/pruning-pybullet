@@ -102,6 +102,8 @@ class URDFRobot:
 if __name__ == '__main__':
 
     DEBUG = False
+    TRELLIS_DEPTH = 0.875
+    CAMERA_OFFSET = np.array([0.6, 0.00, 0.0])
 
     # arm_location = '/home/main/catkin_ws/src/FREDS-MP/fredsmp_utils/robots/ur5/ur5e_cutter_new_mounted_calibrated_precise.urdf'
     arm_location = os.path.join('robots', 'ur5e_cutter_new_calibrated_precise.urdf')
@@ -130,7 +132,8 @@ if __name__ == '__main__':
     robot.reset_joint_states(home_joints)
 
     # Load in other objects in the environment
-    tree_id = pb.loadURDF('models/trellis-model.urdf', [0, 0.875, 0], [0, 0, 0.7071, 0.7071], globalScaling=1.35)
+    scaling = 1.35
+    tree_id = pb.loadURDF('models/trellis-model.urdf', [0, TRELLIS_DEPTH, 0.02 * scaling], [0, 0, 0.7071, 0.7071], globalScaling=scaling)
     # branch_id = pb.loadURDF('models/test_branch.urdf', [0, 0.85, 1.8])
     # pb.createSoftBodyAnchor(branch_id, 0, -1, -1)
 
@@ -147,6 +150,8 @@ if __name__ == '__main__':
     start_pos, start_orientation = robot.get_link_kinematics('cutpoint')
     state_id = pb.saveState()
 
+    start_base, _ = robot.get_link_kinematics('mount_base_joint')
+
     for z_offset in np.linspace(0, 0.20, 50, endpoint=False):
 
         print('Working on Z-Offset {:.4f}'.format(z_offset))
@@ -156,21 +161,24 @@ if __name__ == '__main__':
         robot.reset_joint_states(ik)
         tf = robot.get_link_kinematics('cutpoint', use_com_frame=False, as_matrix=True)
 
+        camera_look_pos = tf[:3,3].copy()
+        camera_look_pos[1] = TRELLIS_DEPTH
+
         # Main simulation loop
         for i in range (500):
 
 
             # print('{} steps elapsed'.format(i))
 
-            # # Compute the camera view matrix and update the corresponding image
+            # Compute the camera view matrix and update the corresponding image
             # view_matrix = robot.get_z_offset_view_matrix('camera_mount')
-            # # view_matrix = pb.computeViewMatrix(cameraEyePosition=[1, 0.5, 0.5], cameraTargetPosition=[0, 0.5, 0.5], cameraUpVector=[0, 0, 1])
-            #
-            # width, height, rgbImg, depthImg, segImg = pb.getCameraImage(
-            #     width=212,
-            #     height=120,
-            #     viewMatrix=view_matrix,
-            #     projectionMatrix=projectionMatrix)
+            view_matrix = pb.computeViewMatrix(cameraEyePosition=start_base + CAMERA_OFFSET, cameraTargetPosition=camera_look_pos, cameraUpVector=[0, 0, 1])
+
+            width, height, rgbImg, depthImg, segImg = pb.getCameraImage(
+                width=212,
+                height=120,
+                viewMatrix=view_matrix,
+                projectionMatrix=projectionMatrix)
 
             # Compute the new IKs to move the robot
             frame_goal = DESIRED_STEP * i
