@@ -103,7 +103,7 @@ if __name__ == '__main__':
 
     DEBUG = False
     TRELLIS_DEPTH = 0.875
-    CAMERA_OFFSET = np.array([0.6, 0.00, 0.0])
+    CAMERA_OFFSET = np.array([0.6, 0.1, 0.0])
 
     # arm_location = '/home/main/catkin_ws/src/FREDS-MP/fredsmp_utils/robots/ur5/ur5e_cutter_new_mounted_calibrated_precise.urdf'
     arm_location = os.path.join('robots', 'ur5e_cutter_new_calibrated_precise.urdf')
@@ -167,18 +167,20 @@ if __name__ == '__main__':
         # Main simulation loop
         for i in range (500):
 
-
-            # print('{} steps elapsed'.format(i))
+            if not i % 240:
+                print('{} steps elapsed'.format(i))
 
             # Compute the camera view matrix and update the corresponding image
-            # view_matrix = robot.get_z_offset_view_matrix('camera_mount')
-            view_matrix = pb.computeViewMatrix(cameraEyePosition=start_base + CAMERA_OFFSET, cameraTargetPosition=camera_look_pos, cameraUpVector=[0, 0, 1])
+            view_matrix = robot.get_z_offset_view_matrix('camera_mount')
+            # view_matrix = pb.computeViewMatrix(cameraEyePosition=start_base + CAMERA_OFFSET, cameraTargetPosition=camera_look_pos, cameraUpVector=[0, 0, 1])
 
             width, height, rgbImg, depthImg, segImg = pb.getCameraImage(
                 width=212,
                 height=120,
                 viewMatrix=view_matrix,
-                projectionMatrix=projectionMatrix)
+                projectionMatrix=projectionMatrix,
+                renderer=pb.ER_BULLET_HARDWARE_OPENGL
+            )
 
             # Compute the new IKs to move the robot
             frame_goal = DESIRED_STEP * i
