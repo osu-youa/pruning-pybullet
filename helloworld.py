@@ -3,9 +3,6 @@ import time
 import pybullet_data
 import numpy as np
 import os
-# from ipdb import set_trace
-
-joint_indexes = []
 
 class URDFRobot:
     def __init__(self, urdf_path, *args, **kwargs):
@@ -83,17 +80,6 @@ class URDFRobot:
             kwargs['targetOrientation'] = target_orientation
         return pb.calculateInverseKinematics(self.robot_id, link_id, **kwargs)
 
-
-    # def solve_end_effector_change_ik(self, link_name_or_id, desired_change):
-    #
-    #     link_id = self.convert_link_name(link_name_or_id)
-    #
-    #     tf = self.get_link_kinematics(link_id, use_com_frame=False, as_matrix=True)
-    #     homog = np.array([0, 0, 0, 1])
-    #     homog[:3] = desired_change
-    #     target_position = (tf @ homog)[:3]
-    #     return pb.calculateInverseKinematics(self.robot_id, link_id, targetPosition=target_position)
-
     def set_control_target(self, targets, control_type=pb.POSITION_CONTROL, include_prismatic=False):
         joint_ids = self.revolute_and_prismatic_joints if include_prismatic else self.revolute_joints
         pb.setJointMotorControlArray(self.robot_id, joint_ids, control_type, targetPositions=targets)
@@ -145,8 +131,9 @@ if __name__ == '__main__':
     # pb.createSoftBodyAnchor(branch_id, 0, -1, -1)
 
     # Initialize stuff for simulation
-    DESIRED_VELOCITY = np.array([0, 0, 0.05])
-    DESIRED_STEP = DESIRED_VELOCITY / 240
+    FORWARD_VELOCITY = 0.05
+    VERTICAL_CONTROL_VELOCITIES = [0.0, 0.01, -0.01]
+    ACTION_STEP = 24
 
 
     #     homog = np.array([0, 0, 0, 1])
@@ -166,10 +153,9 @@ if __name__ == '__main__':
         desired_start_pos = np.array(start_pos) + np.array([0, 0, z_offset])
         ik = robot.solve_end_effector_ik('cutpoint', desired_start_pos, start_orientation)
         robot.reset_joint_states(ik)
-        tf = robot.get_link_kinematics('cutpoint', use_com_frame=False, as_matrix=True)
 
-        camera_look_pos = tf[:3,3].copy()
-        camera_look_pos[1] = TRELLIS_DEPTH
+        target_tf = robot.get_link_kinematics('cutpoint', use_com_frame=False, as_matrix=True)
+        control_action = 0
 
         # Main simulation loop
         for i in range (500):
@@ -179,8 +165,6 @@ if __name__ == '__main__':
 
             # Compute the camera view matrix and update the corresponding image
             view_matrix = robot.get_z_offset_view_matrix('camera_mount')
-            # view_matrix = pb.computeViewMatrix(cameraEyePosition=start_base + CAMERA_OFFSET, cameraTargetPosition=camera_look_pos, cameraUpVector=[0, 0, 1])
-
             width, height, rgbImg, depthImg, segImg = pb.getCameraImage(
                 width=212,
                 height=120,
@@ -190,10 +174,9 @@ if __name__ == '__main__':
             )
 
             # Compute the new IKs to move the robot
-            frame_goal = DESIRED_STEP * i
-            homog = np.array([0., 0., 0., 1.])
-            homog[:3] = frame_goal
-            target_position = (tf @ homog)[:3]
+            delta = np.array([0., VERTICAL_CONTROL_VELOCITIES[control_action] / 240, FORWARD_VELOCITY / 240, 1.])
+            target_position = (target_tf @ delta)[:3]
+            target_tf[:3,3] = target_position
 
             ik = robot.solve_end_effector_ik('cutpoint', target_position, start_orientation)
             robot.set_control_target(ik)
