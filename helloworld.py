@@ -119,6 +119,13 @@ if __name__ == '__main__':
 
     # Environment setup
     physicsClient = pb.connect(pb.GUI)#or p.DIRECT for non-graphical version
+
+    # # Process concave model files as necessary
+    # file_path = 'robots/ur5e/collision/new-cutter.obj'
+    # name_out = 'new-cutter-convexified.obj'
+    # name_log = 'log.txt'
+    # pb.vhacd(file_path, name_out, name_log)
+
     pb.setAdditionalSearchPath(pybullet_data.getDataPath()) #optionally
     pb.setGravity(0, 0, -9.8)
     planeId = pb.loadURDF("plane.urdf")
@@ -152,7 +159,7 @@ if __name__ == '__main__':
 
     start_base, _ = robot.get_link_kinematics('mount_base_joint')
 
-    for z_offset in np.linspace(0, 0.20, 50, endpoint=False):
+    for z_offset in np.linspace(0.06, 0.20, 50, endpoint=False):
 
         print('Working on Z-Offset {:.4f}'.format(z_offset))
         pb.restoreState(stateId=state_id)
