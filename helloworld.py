@@ -45,6 +45,9 @@ class URDFRobot:
             pb.resetJointState(self.robot_id, joint_id, position, velocity)
 
 
+    def get_force_reading(self, joint):
+        return pb.getJointState(self.robot_id, self.joint_names_to_ids[joint])[2]
+
     def get_link_kinematics(self, link_name_or_id, use_com_frame=False, as_matrix=False):
 
         link_id = self.convert_link_name(link_name_or_id)
@@ -84,6 +87,9 @@ class URDFRobot:
         joint_ids = self.revolute_and_prismatic_joints if include_prismatic else self.revolute_joints
         pb.setJointMotorControlArray(self.robot_id, joint_ids, control_type, targetPositions=targets)
 
+    def enable_force_torque_readings(self, joint_name):
+        joint_id = self.joint_names_to_ids[joint_name]
+        pb.enableJointForceTorqueSensor(self.robot_id, joint_id, True)
 
 if __name__ == '__main__':
 
@@ -123,6 +129,7 @@ if __name__ == '__main__':
     home_joints = [-1.5708, -2.2689, -1.3963, 0.52360, 1.5708, 3.14159]
     robot = URDFRobot(arm_location, startPos, startOrientation)
     robot.reset_joint_states(home_joints)
+    robot.enable_force_torque_readings('wrist_3_link-tool0_fixed_joint')
 
     # Load in other objects in the environment
     scaling = 1.35
@@ -163,6 +170,11 @@ if __name__ == '__main__':
             if not i % 240:
                 print('{} steps elapsed'.format(i))
 
+            if not i % 24:
+                control_action = np.random.randint(3)
+                forces = robot.get_force_reading('wrist_3_link-tool0_fixed_joint')
+                print(forces)
+
             # Compute the camera view matrix and update the corresponding image
             view_matrix = robot.get_z_offset_view_matrix('camera_mount')
             width, height, rgbImg, depthImg, segImg = pb.getCameraImage(
@@ -186,7 +198,6 @@ if __name__ == '__main__':
 
             time.sleep(1. / 240.)
             pb.stepSimulation()
-
 
     pb.disconnect()
 
