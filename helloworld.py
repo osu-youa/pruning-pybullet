@@ -95,9 +95,6 @@ if __name__ == '__main__':
 
     DEBUG = False
     TRELLIS_DEPTH = 0.875
-    CAMERA_OFFSET = np.array([0.6, 0.1, 0.0])
-
-    # arm_location = '/home/main/catkin_ws/src/FREDS-MP/fredsmp_utils/robots/ur5/ur5e_cutter_new_mounted_calibrated_precise.urdf'
     arm_location = os.path.join('robots', 'ur5e_cutter_new_calibrated_precise.urdf')
 
 
@@ -133,7 +130,9 @@ if __name__ == '__main__':
 
     # Load in other objects in the environment
     scaling = 1.35
-    tree_id = pb.loadURDF('models/trellis-model.urdf', [0, TRELLIS_DEPTH, 0.02 * scaling], [0, 0, 0.7071, 0.7071], globalScaling=scaling)
+    tree = URDFRobot('models/trellis-model.urdf', basePosition=[0, TRELLIS_DEPTH, 0.02 * scaling],
+                        baseOrientation=[0, 0, 0.7071, 0.7071], globalScaling=scaling)
+    # tree_id = pb.loadURDF('models/trellis-model.urdf', [0, TRELLIS_DEPTH, 0.02 * scaling], [0, 0, 0.7071, 0.7071], globalScaling=scaling)
     # branch_id = pb.loadURDF('models/test_branch.urdf', [0, 0.85, 1.8])
     # pb.createSoftBodyAnchor(branch_id, 0, -1, -1)
 
@@ -153,27 +152,38 @@ if __name__ == '__main__':
 
     start_base, _ = robot.get_link_kinematics('mount_base_joint')
 
-    for z_offset in np.linspace(0.06, 0.20, 50, endpoint=False):
+    for _ in range(10):
+        # for z_offset in np.linspace(0.06, 0.20, 50, endpoint=False):
 
-        print('Working on Z-Offset {:.4f}'.format(z_offset))
         pb.restoreState(stateId=state_id)
-        desired_start_pos = np.array(start_pos) + np.array([0, 0, z_offset])
-        ik = robot.solve_end_effector_ik('cutpoint', desired_start_pos, start_orientation)
+
+        target_id = np.random.randint(len(tree.joint_names_to_ids))
+        target_pos = tree.get_link_kinematics(target_id)[0]
+
+        robot_start_pos = target_pos - np.array([0, np.random.uniform(0.08, 0.12), 0])
+        robot_start_pos += np.random.uniform(-0.05, 0.05, 3) * np.array([1, 0, 1])
+
+        ik = robot.solve_end_effector_ik('cutpoint', robot_start_pos, start_orientation)
         robot.reset_joint_states(ik)
 
         target_tf = robot.get_link_kinematics('cutpoint', use_com_frame=False, as_matrix=True)
         control_action = 0
 
         # Main simulation loop
-        for i in range (500):
+        for i in range (640):
 
             if not i % 240:
                 print('{} steps elapsed'.format(i))
 
             if not i % 24:
                 control_action = np.random.randint(3)
-                forces = robot.get_force_reading('wrist_3_link-tool0_fixed_joint')
-                print(forces)
+                cutter_loc = robot.get_link_kinematics('cutpoint', use_com_frame=False)[0]
+                target_loc = tree.get_link_kinematics(target_id)[0]
+
+                d = np.linalg.norm(np.array(target_loc) - np.array(cutter_loc))
+                print('Dist: {:.3f}m'.format(d))
+
+
 
             # Compute the camera view matrix and update the corresponding image
             view_matrix = robot.get_z_offset_view_matrix('camera_mount')

@@ -24,5 +24,39 @@
       </geometry>
     </collision>
   </link>
+
+  <joint name="world_target_1" type="fixed">
+    <origin rpy="0 0 0" xyz="0.0 0.2 0.8"/>
+    <parent link="baseLink"/>
+    <child link="target_1"/>
+  </joint>
+    <link concave="no" name="target_1">
+    <visual>
+      <origin rpy="0 0 0" xyz="0 0 0"/>
+      <geometry>
+          <sphere center="0.0 0.0 0.0" radius="0.005" />
+      </geometry>
+        <material name="target_color">
+        <color rgba="1 0 0 0.5"/>
+      </material>
+    </visual>
+    </link>
+
+    <joint name="world_target_2" type="fixed">
+    <origin rpy="0 0 0" xyz="0.0 -0.2 0.8"/>
+    <parent link="baseLink"/>
+    <child link="target_2"/>
+  </joint>
+    <link concave="no" name="target_2">
+    <visual>
+      <origin rpy="0 0 0" xyz="0 0 0"/>
+      <geometry>
+          <sphere center="0.0 0.0 0.0" radius="0.005" />
+      </geometry>
+        <material name="target_color">
+        <color rgba="1 0 0 0.5"/>
+      </material>
+    </visual>
+    </link>
 </robot>
 
