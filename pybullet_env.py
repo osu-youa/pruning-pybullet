@@ -49,18 +49,27 @@ class CutterEnv(gym.Env):
         scaling = 1.35
         self.tree = URDFRobot('models/trellis-model.urdf', basePosition=[0, 0.875, 0.02 * scaling],
                               baseOrientation=[0, 0, 0.7071, 0.7071], globalScaling=scaling)
+        self.start_state = pb.saveState()
 
     def step(self, action):
         # Execute one time step within the environment
+
         horizontal, vertical, forward = action
         step = self.action_freq / 240 * forward
         delta = np.array([horizontal * step, vertical * step, step, 1.0], dtype=np.float32)
-        target_pos = (self.target_tf @ delta)[:3]
-        self.target_tf[:3,3] = target_pos
+        prev_target_pos = self.target_tf[:3,3]
+        new_target_pos = (self.target_tf @ delta)[:3]
+
+
+        diff = new_target_pos - prev_target_pos
 
         # Move the arm in the environment
         self.elapsed_time += self.action_freq / 240
-        for _ in range(self.action_freq):
+        for i in range(self.action_freq):
+            target_pos = prev_target_pos + (i + 1) / self.action_freq * diff
+            self.target_tf[:3, 3] = target_pos
+            ik = self.robot.solve_end_effector_ik('cutpoint', target_pos, self.start_orientation)
+            self.robot.set_control_target(ik)
             pb.stepSimulation()
 
         return self.get_obs(), self.get_reward(), self.is_done(), {}
@@ -107,6 +116,7 @@ class CutterEnv(gym.Env):
     def reset(self):
 
         self.elapsed_time = 0.0
+        pb.restoreState(stateId=self.start_state)
 
         # Pick a target on the tree
         self.target_id = np.random.randint(len(self.tree.joint_names_to_ids))
@@ -118,6 +128,10 @@ class CutterEnv(gym.Env):
 
         ik = self.robot.solve_end_effector_ik('cutpoint', robot_start_pos, self.start_orientation)
         self.robot.reset_joint_states(ik)
+
+        self.target_tf = self.robot.get_link_kinematics('cutpoint', as_matrix=True)
+
+        return self.get_obs()
 
     def render(self, mode='human', close=False):
         print('Last dist: {:.3f}'.format(self.get_cutter_dist()))
@@ -137,7 +151,8 @@ if __name__ == '__main__':
 
     obs = env.reset()
     for i in range(1000):
-        action, _states = model.predict(obs, deterministic=True)
+        # action, _states = model.predict(obs, deterministic=True)
+        action = env.action_space.sample()
         obs, reward, done, info = env.step(action)
         env.render()
         if done:
