@@ -360,36 +360,6 @@
     <child link="tool0"/>
   </joint>
 
-  <link name="camera_mount">
-    <visual>
-      <origin rpy="0 0 0" xyz="0 0 0"/>
-      <geometry>
-        <mesh filename="ur5e/visual/camera_mount.dae" scale="1.0 1.0 1.0"/>
-      </geometry>
-      <material name="LightGrey"/>
-    </visual>
-    <!-- Camera collision -->
-
-        <collision>
-          <origin rpy="0 0 0" xyz="0 0.0725 0.025" />
-          <geometry>
-            <box size="0.121 0.060 0.050" />
-          </geometry>
-        </collision>
-        <inertial>
-      <origin rpy="0 0 0" xyz="1.0E-08 1.0E-08 1.0E-08"/>
-      <mass value="1.0E-08"/>
-      <inertia ixx="1.0E-08" ixy="1.0E-08" ixz="1.0E-08" iyy="1.0E-08" iyz="1.0E-08" izz="1.0E-08"/>
-    </inertial>
-  </link>
-
-  <joint name="camera_mount" type="fixed">
-      <origin rpy="0 0 0" xyz="0 0 0"/>
-    <axis xyz="0 0 1"/>
-    <parent link="tool0"/>
-    <child link="camera_mount"/>
-  </joint>
-
   <link name="cutter">
     <visual>
       <origin rpy="0 0 0" xyz="0 0 0.006"/>
@@ -470,7 +440,7 @@
   <joint name="cutter" type="fixed">
       <origin rpy="0 0 0" xyz="0 0 0"/>
     <axis xyz="0 0 1"/>
-    <parent link="camera_mount"/>
+    <parent link="tool0"/>
     <child link="cutter"/>
   </joint>
   <link name="endpoint">

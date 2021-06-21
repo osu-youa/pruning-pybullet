@@ -3,6 +3,10 @@ import time
 import pybullet_data
 import numpy as np
 import os
+import os
+
+# This is a suboptimal hack involving some sort of Numpy installation issue which was causing crashes when doing matrix operations!
+os.environ["KMP_DUPLICATE_LIB_OK"]="TRUE"
 
 class URDFRobot:
     def __init__(self, urdf_path, *args, **kwargs):
@@ -69,8 +73,10 @@ class URDFRobot:
         else:
             return position, orientation
 
-    def get_z_offset_view_matrix(self, link_name_or_id):
+    def get_z_offset_view_matrix(self, link_name_or_id, apply_offset=None):
         tf = self.get_link_kinematics(link_name_or_id, use_com_frame=False, as_matrix=True)
+        if apply_offset is not None:
+            tf = tf @ apply_offset
         target_position = (tf @ np.array([0, 0, 1, 1]))[:3]
         return pb.computeViewMatrix(cameraEyePosition=tf[:3,3], cameraTargetPosition=target_position,
                                     cameraUpVector=[0, 0, 1])
@@ -192,7 +198,7 @@ if __name__ == '__main__':
                 height=120,
                 viewMatrix=view_matrix,
                 projectionMatrix=projectionMatrix,
-                renderer=pb.ER_BULLET_HARDWARE_OPENGL
+                renderer=pb.ER_TINY_RENDERER
             )
 
             # Compute the new IKs to move the robot

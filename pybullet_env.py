@@ -31,6 +31,7 @@ class CutterEnv(gym.Env):
         self.max_elapsed_time = max_elapsed_time
         self.min_reward_dist = min_reward_dist
         self.max_vel = max_vel
+        self.current_camera_tf = np.identity(4)
 
         # State parameters
         self.target_id = 0
@@ -39,6 +40,7 @@ class CutterEnv(gym.Env):
 
         # Setup Pybullet simulation
 
+        self.gui = use_gui
         self.client_id = pb.connect(pb.GUI if use_gui else pb.DIRECT)
         pb.setAdditionalSearchPath(pybullet_data.getDataPath(), physicsClientId=self.client_id)
         pb.setGravity(0, 0, -9.8, physicsClientId=self.client_id)
@@ -53,6 +55,14 @@ class CutterEnv(gym.Env):
         self.proj_mat = pb.computeProjectionMatrixFOV(
             fov=60.0, aspect = width / height, nearVal=0.01,
             farVal=3.0)
+
+        self.tool_to_camera_offset = np.array([0.0, 0.075, 0.0, 1.0])
+        tool_tf = self.robot.get_link_kinematics('wrist_3_link-tool0_fixed_joint', as_matrix=True)
+        self.ideal_camera_pos = (tool_tf @ self.tool_to_camera_offset)[:3]
+        ideal_view_matrix = np.reshape(pb.computeViewMatrix(cameraEyePosition = self.ideal_camera_pos,
+                                                            cameraTargetPosition=self.robot.get_link_kinematics('cutpoint')[0],
+                                                            cameraUpVector=[0,0,1]), (4,4)).T
+        self.ideal_tool_camera_tf = np.linalg.inv(tool_tf) @ np.linalg.inv(ideal_view_matrix)
 
         scaling = 1.35
         self.tree = URDFRobot('models/trellis-model.urdf', basePosition=[0, 0.875, 0.02 * scaling],
@@ -89,13 +99,18 @@ class CutterEnv(gym.Env):
 
     def get_obs(self):
         # Grab the new image observation
-        view_matrix = self.robot.get_z_offset_view_matrix('camera_mount')
+        view_matrix = self.robot.get_link_kinematics('wrist_3_link-tool0_fixed_joint', as_matrix=True) @ self.current_camera_tf
+
+        # view_matrix = self.robot.get_z_offset_view_matrix('wrist_3_link-tool0_fixed_joint')
+
         _, _, rgb_img, depth_img, seg_img = pb.getCameraImage(
             width=self.width,
             height=self.height,
-            viewMatrix=view_matrix,
+            viewMatrix=np.linalg.inv(view_matrix).T.reshape(-1),
             projectionMatrix=self.proj_mat,
             renderer=pb.ER_BULLET_HARDWARE_OPENGL,
+            # renderer=pb.ER_TINY_RENDERER,
+            # renderer=pb.ER_BULLET_HARDWARE_OPENGL if self.gui else pb.ER_TINY_RENDERER,
             physicsClientId=self.client_id
         )
 
@@ -130,6 +145,14 @@ class CutterEnv(gym.Env):
 
         self.elapsed_time = 0.0
         pb.restoreState(stateId=self.start_state, physicsClientId=self.client_id)
+
+        xyz_noise = np.random.uniform(-0.0025, 0.0025, size=3)
+        rpy_noise = np.random.uniform(-np.radians(2.5), np.radians(2.5), size=3)
+        quat = pb.getQuaternionFromEuler(rpy_noise)
+        noise_tf = np.identity(4)
+        noise_tf[:3,3] = xyz_noise
+        noise_tf[:3,:3] = np.reshape(pb.getMatrixFromQuaternion(quat), (3,3))
+        self.current_camera_tf = self.ideal_tool_camera_tf @ noise_tf
 
         # Pick a target on the tree
         self.target_id = np.random.randint(len(self.tree.joint_names_to_ids))
