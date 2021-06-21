@@ -38,6 +38,13 @@ class CutterEnv(gym.Env):
         self.elapsed_time = 0.0
 
         # Setup Pybullet simulation
+
+        self.client_id = pb.connect(pb.GUI if use_gui else pb.DIRECT)
+        pb.setAdditionalSearchPath(pybullet_data.getDataPath(), physicsClientId=self.client_id)
+        pb.setGravity(0, 0, -9.8, physicsClientId=self.client_id)
+        pb.loadURDF("plane.urdf", physicsClientId=self.client_id)
+
+
         arm_location = os.path.join('robots', 'ur5e_cutter_new_calibrated_precise.urdf')
         home_joints = [-1.5708, -2.2689, -1.3963, 0.52360, 1.5708, 3.14159]
         self.robot = URDFRobot(arm_location, [0, 0, 0.02], pb.getQuaternionFromEuler([0, 0, 0]))
@@ -50,7 +57,7 @@ class CutterEnv(gym.Env):
         scaling = 1.35
         self.tree = URDFRobot('models/trellis-model.urdf', basePosition=[0, 0.875, 0.02 * scaling],
                               baseOrientation=[0, 0, 0.7071, 0.7071], globalScaling=scaling)
-        self.start_state = pb.saveState()
+        self.start_state = pb.saveState(physicsClientId=self.client_id)
 
     def step(self, action, realtime=False):
         # Execute one time step within the environment
@@ -73,7 +80,7 @@ class CutterEnv(gym.Env):
             self.target_tf[:3, 3] = target_pos
             ik = self.robot.solve_end_effector_ik('cutpoint', target_pos, self.start_orientation)
             self.robot.set_control_target(ik)
-            pb.stepSimulation()
+            pb.stepSimulation(physicsClientId=self.client_id)
             if realtime:
                 time.sleep(1.0/240)
 
@@ -88,7 +95,8 @@ class CutterEnv(gym.Env):
             height=self.height,
             viewMatrix=view_matrix,
             projectionMatrix=self.proj_mat,
-            renderer=pb.ER_BULLET_HARDWARE_OPENGL
+            renderer=pb.ER_BULLET_HARDWARE_OPENGL,
+            physicsClientId=self.client_id
         )
 
         if self.use_depth:
@@ -121,7 +129,7 @@ class CutterEnv(gym.Env):
     def reset(self):
 
         self.elapsed_time = 0.0
-        pb.restoreState(stateId=self.start_state)
+        pb.restoreState(stateId=self.start_state, physicsClientId=self.client_id)
 
         # Pick a target on the tree
         self.target_id = np.random.randint(len(self.tree.joint_names_to_ids))
@@ -143,14 +151,7 @@ class CutterEnv(gym.Env):
 
 if __name__ == '__main__':
 
-    physicsClient = pb.connect(pb.GUI)
-    # pb.connect(pb.GUI if use_gui else pb.DIRECT)
-    pb.setAdditionalSearchPath(pybullet_data.getDataPath())
-    pb.setGravity(0, 0, -9.8)
-    pb.loadURDF("plane.urdf")
-
     env = CutterEnv(159, 90, use_depth=False, use_gui=True, max_elapsed_time=2.5, max_vel=0.05)
-
 
     model = PPO("CnnPolicy", env, verbose=1)
 
