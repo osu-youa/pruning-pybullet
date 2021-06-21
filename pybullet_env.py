@@ -108,9 +108,7 @@ class CutterEnv(gym.Env):
             height=self.height,
             viewMatrix=np.linalg.inv(view_matrix).T.reshape(-1),
             projectionMatrix=self.proj_mat,
-            renderer=pb.ER_BULLET_HARDWARE_OPENGL,
-            # renderer=pb.ER_TINY_RENDERER,
-            # renderer=pb.ER_BULLET_HARDWARE_OPENGL if self.gui else pb.ER_TINY_RENDERER,
+            renderer=pb.ER_TINY_RENDERER,
             physicsClientId=self.client_id
         )
 
@@ -166,6 +164,7 @@ class CutterEnv(gym.Env):
         self.robot.reset_joint_states(ik)
 
         self.target_tf = self.robot.get_link_kinematics('cutpoint', as_matrix=True)
+        print('Reset!')
 
         return self.get_obs()
 
@@ -174,28 +173,36 @@ class CutterEnv(gym.Env):
 
 if __name__ == '__main__':
 
-    env = CutterEnv(159, 90, use_depth=False, use_gui=True, max_elapsed_time=2.5, max_vel=0.05)
+    # action = 'eval'
+    action = 'train'
 
-    model = PPO("CnnPolicy", env, verbose=1)
+    if action == 'train':
+        env = CutterEnv(159, 90, use_depth=False, use_gui=False, max_elapsed_time=2.5, max_vel=0.05)
+        model = PPO("CnnPolicy", env, verbose=1)
 
-    # if os.path.exists('test_model.model'):
-    #     model = model.load('test_model.model')
-    print('Learning...')
-    model.learn(total_timesteps=20000)
-    print('Done learning!')
-    model.save('test_model.model')
+        print('Learning...')
+        model.learn(total_timesteps=20000)
+        print('Done learning!')
+        model.save('test_model.model')
 
-    obs = env.reset()
-    all_dists = []
-    for i in range(1000):
-        action, _states = model.predict(obs, deterministic=True)
-        # action = env.action_space.sample()
-        # action = np.array([0.0, 0.0, 1.0])
-        obs, reward, done, info = env.step(action, realtime=True)
-        # env.render()
-        if done:
-            all_dists.append(env.get_cutter_dist())
-            obs = env.reset()
+    elif action == 'eval':
+        env = CutterEnv(159, 90, use_depth=False, use_gui=True, max_elapsed_time=2.5, max_vel=0.05)
+        model = PPO("CnnPolicy", env, verbose=1)
+        if os.path.exists('test_model.model'):
+            model = model.load('test_model.model')
+        obs = env.reset()
+        all_dists = []
+        for i in range(1000):
+            action, _states = model.predict(obs, deterministic=True)
+            # action = env.action_space.sample()
+            # action = np.array([0.0, 0.0, 1.0])
+            obs, reward, done, info = env.step(action, realtime=True)
+            # env.render()
+            if done:
+                all_dists.append(env.get_cutter_dist())
+                obs = env.reset()
 
-    print('Average terminal dist: {:.3f}'.format(np.mean(all_dists)))
-    env.close()
+        print('Average terminal dist: {:.3f}'.format(np.mean(all_dists)))
+        env.close()
+    else:
+        raise NotImplementedError("Unknown action {}".format(action))
