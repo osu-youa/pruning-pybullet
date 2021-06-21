@@ -102,7 +102,7 @@ if __name__ == '__main__':
     projectionMatrix = pb.computeProjectionMatrixFOV(
         fov=47.5,
         aspect=848/480,
-        nearVal=0.1,
+        nearVal=0.01,
         farVal=3.1)
     # TODO: Confirm Intrinsic Parameters for D435
 

@@ -20,7 +20,7 @@ class CutterEnv(gym.Env):
         super(CutterEnv, self).__init__()
 
         # Initialize gym parameters
-        self.action_space = spaces.Box(np.array([-1.0, -1.0, 0.0]), np.array([1.0, 1.0, max_vel]), dtype=np.float32)    # LR, UD, Forward
+        self.action_space = spaces.Box(np.array([-1.0, -1.0, -1.0]), np.array([1.0, 1.0, 1.0]), dtype=np.float32)    # LR, UD, Forward
         self.observation_space = spaces.Box(low=0, high=255, shape=(height, width, 4 if use_depth else 3), dtype=np.uint8)
 
         # Configuration parameters
@@ -30,6 +30,7 @@ class CutterEnv(gym.Env):
         self.action_freq = action_freq
         self.max_elapsed_time = max_elapsed_time
         self.min_reward_dist = min_reward_dist
+        self.max_vel = max_vel
 
         # State parameters
         self.target_id = 0
@@ -43,7 +44,7 @@ class CutterEnv(gym.Env):
         self.robot.reset_joint_states(home_joints)
         self.start_orientation = self.robot.get_link_kinematics('cutpoint')[1]
         self.proj_mat = pb.computeProjectionMatrixFOV(
-            fov=47.5, aspect = width / height, nearVal=0.01,
+            fov=60.0, aspect = width / height, nearVal=0.01,
             farVal=3.0)
 
         scaling = 1.35
@@ -51,11 +52,13 @@ class CutterEnv(gym.Env):
                               baseOrientation=[0, 0, 0.7071, 0.7071], globalScaling=scaling)
         self.start_state = pb.saveState()
 
-    def step(self, action):
+    def step(self, action, realtime=False):
         # Execute one time step within the environment
 
+        self.target_tf = self.robot.get_link_kinematics('cutpoint', as_matrix=True)
+
         horizontal, vertical, forward = action
-        step = self.action_freq / 240 * forward
+        step = self.action_freq * self.max_vel / 240 * forward
         delta = np.array([horizontal * step, vertical * step, step, 1.0], dtype=np.float32)
         prev_target_pos = self.target_tf[:3,3]
         new_target_pos = (self.target_tf @ delta)[:3]
@@ -71,6 +74,8 @@ class CutterEnv(gym.Env):
             ik = self.robot.solve_end_effector_ik('cutpoint', target_pos, self.start_orientation)
             self.robot.set_control_target(ik)
             pb.stepSimulation()
+            if realtime:
+                time.sleep(1.0/240)
 
         return self.get_obs(), self.get_reward(), self.is_done(), {}
 
@@ -144,18 +149,29 @@ if __name__ == '__main__':
     pb.setGravity(0, 0, -9.8)
     pb.loadURDF("plane.urdf")
 
-    env = CutterEnv(212, 120, use_depth=True, use_gui=True)
+    env = CutterEnv(159, 90, use_depth=False, use_gui=True, max_elapsed_time=2.5, max_vel=0.05)
 
-    model = PPO("MlpPolicy", env, verbose=1)
-    model.learn(total_timesteps=10000)
+
+    model = PPO("CnnPolicy", env, verbose=1)
+
+    # if os.path.exists('test_model.model'):
+    #     model = model.load('test_model.model')
+    print('Learning...')
+    model.learn(total_timesteps=20000)
+    print('Done learning!')
+    model.save('test_model.model')
 
     obs = env.reset()
+    all_dists = []
     for i in range(1000):
-        # action, _states = model.predict(obs, deterministic=True)
-        action = env.action_space.sample()
-        obs, reward, done, info = env.step(action)
-        env.render()
+        action, _states = model.predict(obs, deterministic=True)
+        # action = env.action_space.sample()
+        # action = np.array([0.0, 0.0, 1.0])
+        obs, reward, done, info = env.step(action, realtime=True)
+        # env.render()
         if done:
+            all_dists.append(env.get_cutter_dist())
             obs = env.reset()
 
+    print('Average terminal dist: {:.3f}'.format(np.mean(all_dists)))
     env.close()

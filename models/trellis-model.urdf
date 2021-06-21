@@ -34,16 +34,43 @@
     <visual>
       <origin rpy="0 0 0" xyz="0 0 0"/>
       <geometry>
-          <sphere center="0.0 0.0 0.0" radius="0.005" />
+          <sphere center="0.0 0.0 0.0" radius="0.01" />
       </geometry>
         <material name="target_color">
-        <color rgba="1 0 0 0.5"/>
+        <color rgba="0 1 0 1"/>
       </material>
     </visual>
+
+    <visual>
+      <origin rpy="0 0 0" xyz="0 0.04 0"/>
+      <geometry>
+          <cylinder radius="0.0025" length="0.15" />
+      </geometry>
+        <material name="branch_color">
+        <color rgba="0 0 1 0.5"/>
+      </material>
+    </visual>
+
+    <visual>
+          <origin rpy="1.571 0 0" xyz="0 -0.01 0"/>
+          <geometry>
+              <cylinder radius="0.0025" length="0.12" />
+          </geometry>
+            <material name="branch_color">
+            <color rgba="0 0 1 0.5"/>
+          </material>
+    </visual>
+
+    <collision concave="no">
+        <origin rpy="1.571 0 0" xyz="0 -0.01 0"/>
+            <geometry>
+              <cylinder radius="0.0025" length="0.12" />
+            </geometry>
+    </collision>
     </link>
 
     <joint name="world_target_2" type="fixed">
-    <origin rpy="0 0 0" xyz="0.0 -0.2 0.8"/>
+    <origin rpy="0 0 0" xyz="0.0 -0.2 0.75"/>
     <parent link="baseLink"/>
     <child link="target_2"/>
   </joint>
@@ -51,12 +78,40 @@
     <visual>
       <origin rpy="0 0 0" xyz="0 0 0"/>
       <geometry>
-          <sphere center="0.0 0.0 0.0" radius="0.005" />
+          <sphere center="0.0 0.0 0.0" radius="0.01" />
       </geometry>
         <material name="target_color">
-        <color rgba="1 0 0 0.5"/>
+        <color rgba="0 1 0 1"/>
       </material>
     </visual>
+
+    <visual>
+      <origin rpy="0 0 0" xyz="0 -0.04 0"/>
+      <geometry>
+          <cylinder radius="0.0025" length="0.15" />
+      </geometry>
+        <material name="branch_color">
+        <color rgba="0 0 1 0.5"/>
+      </material>
+    </visual>
+
+    <visual>
+          <origin rpy="1.571 0 0" xyz="0 0.01 0"/>
+          <geometry>
+              <cylinder radius="0.0025" length="0.12" />
+          </geometry>
+            <material name="branch_color">
+            <color rgba="0 0 1 0.5"/>
+          </material>
+    </visual>
+
+    <collision concave="no">
+        <origin rpy="1.571 0 0" xyz="0 0.01 0"/>
+            <geometry>
+              <cylinder radius="0.0025" length="0.12" />
+            </geometry>
+    </collision>
+
     </link>
 </robot>
 
