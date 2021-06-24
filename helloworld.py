@@ -2,11 +2,16 @@ import pybullet as pb
 import time
 import pybullet_data
 import numpy as np
+import trimesh
 import os
-import os
+from scipy.spatial.transform import Rotation
 
 # This is a suboptimal hack involving some sort of Numpy installation issue which was causing crashes when doing matrix operations!
 os.environ["KMP_DUPLICATE_LIB_OK"]="TRUE"
+
+# For debugging
+import matplotlib.pyplot as plt
+from mpl_toolkits import mplot3d
 
 class URDFRobot:
     def __init__(self, urdf_path, *args, **kwargs):
@@ -32,6 +37,10 @@ class URDFRobot:
                 self.revolute_and_prismatic_joints.append(i_joint)
                 if joint_type == pb.JOINT_REVOLUTE:
                     self.revolute_joints.append(i_joint)
+
+        self.ghost_bodies = {}
+        self.ghost_body_tfs = {}
+
 
     def convert_link_name(self, name):
         if isinstance(name, int):
@@ -96,6 +105,65 @@ class URDFRobot:
     def enable_force_torque_readings(self, joint_name):
         joint_id = self.joint_names_to_ids[joint_name]
         pb.enableJointForceTorqueSensor(self.robot_id, joint_id, True)
+
+    def attach_ghost_body_from_file(self, file_name, name, joint_attachment, xyz=None, rpy=None):
+        """
+        Attaches a ghost collision body from a model file to a given joint.
+        A really hacky solution for the fact that Pybullet's Python wrapper doesn't support ghost bodies.
+        You should verify visually in the URDF that the params input here match what you expect.
+        """
+
+        mesh = trimesh.load(file_name)
+        assert mesh.is_watertight
+        self.ghost_bodies[name] = (mesh, trimesh.proximity.ProximityQuery(mesh))
+        if xyz is None:
+            xyz = np.zeros(3)
+        if rpy is None:
+            rpy = np.zeros(3)
+
+        quat = Rotation.from_euler('xyz', rpy, degrees=False).as_quat()
+        tf = np.identity(4)
+        tf[:3,3] = xyz
+        tf[:3,:3] = np.reshape(pb.getMatrixFromQuaternion(quat), (3,3))
+
+        self.ghost_body_tfs[name] = (joint_attachment, tf)
+
+        mins = mesh.vertices.min(axis=0)
+        maxs = mesh.vertices.max(axis=0)
+        rand = mins + np.random.uniform(0, 1, size=(1000, 3)) * (maxs - mins)
+        dists = self.ghost_bodies[name][1].signed_distance(rand)
+        to_show = rand[dists > 0]
+        self.debug_test_points = to_show
+
+    def query_ghost_body_collision(self, name, points, point_frame_tf=None, plot_debug=False):
+        tf = (self.get_link_kinematics(self.ghost_body_tfs[name][0], as_matrix=True) @ self.ghost_body_tfs[name][1])
+        if point_frame_tf is not None:
+            if not isinstance(point_frame_tf, np.ndarray):
+                point_frame_tf = self.get_link_kinematics(point_frame_tf, as_matrix=True)
+            tf = np.linalg.inv(tf) @ point_frame_tf
+        pts_homog = np.ones((len(points), 4))
+        pts_homog[:,:3] = points
+        pts_tfed = (tf @ pts_homog.T)[:3].T
+
+        if plot_debug:
+            fig = plt.figure()
+            ax = plt.axes(projection='3d')
+            to_show = self.debug_test_points
+            ax.scatter(to_show[:, 0], to_show[:, 1], to_show[:, 2], color='red', label='Target')
+            ax.scatter(pts_tfed[:,0], pts_tfed[:,1], pts_tfed[:,2], color='blue', label='Queried')
+            ax.legend()
+            plt.show()
+
+
+        return (self.ghost_bodies[name][1].signed_distance(pts_tfed) > 0).any()
+
+
+
+
+
+
+
+
 
 if __name__ == '__main__':
 

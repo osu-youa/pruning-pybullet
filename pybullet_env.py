@@ -16,14 +16,15 @@ class CutterEnv(gym.Env):
     metadata = {'render.modes': ['human']}
 
     def __init__(self, width, height, use_depth=False, max_vel=0.075, action_freq=24, max_elapsed_time=3.0,
-                 min_reward_dist=0.10, use_gui=False):
+                 min_reward_dist=0.10, use_gui=False, debug=False):
         super(CutterEnv, self).__init__()
 
         # Initialize gym parameters
-        self.action_space = spaces.Box(np.array([-1.0, -1.0, -1.0]), np.array([1.0, 1.0, 1.0]), dtype=np.float32)    # LR, UD, Forward
+        self.action_space = spaces.Box(np.array([-1.0, -1.0, -1.0]), np.array([1.0, 1.0, 1.0]), dtype=np.float32)    # LR, UD, Terminate
         self.observation_space = spaces.Box(low=0, high=255, shape=(height, width, 4 if use_depth else 3), dtype=np.uint8)
 
         # Configuration parameters
+        self.debug = debug
         self.width = width
         self.height = height
         self.use_depth = use_depth
@@ -32,11 +33,13 @@ class CutterEnv(gym.Env):
         self.min_reward_dist = min_reward_dist
         self.max_vel = max_vel
         self.current_camera_tf = np.identity(4)
+        self.mesh_num_points = 100
 
         # State parameters
         self.target_id = 0
         self.target_tf = np.identity(4)
         self.elapsed_time = 0.0
+        self.mesh_points = {}
 
         # Setup Pybullet simulation
 
@@ -55,6 +58,8 @@ class CutterEnv(gym.Env):
         self.proj_mat = pb.computeProjectionMatrixFOV(
             fov=60.0, aspect = width / height, nearVal=0.01,
             farVal=3.0)
+        self.robot.attach_ghost_body_from_file('robots/ur5e/collision/cutter-mouth-collision.stl',
+                                               'mouth', 'cutpoint', rpy=[0, 0, 3.1416])
 
         self.tool_to_camera_offset = np.array([0.0, 0.075, 0.0, 1.0])
         tool_tf = self.robot.get_link_kinematics('wrist_3_link-tool0_fixed_joint', as_matrix=True)
@@ -74,13 +79,15 @@ class CutterEnv(gym.Env):
 
         self.target_tf = self.robot.get_link_kinematics('cutpoint', as_matrix=True)
 
-        horizontal, vertical, forward = action
-        step = self.action_freq * self.max_vel / 240 * forward
+        horizontal, vertical, terminate = action
+        terminate = terminate > 0
+        if terminate:
+            return self.get_obs(), self.get_reward(True), True, {}
+
+        step = self.action_freq * self.max_vel / 240
         delta = np.array([horizontal * step, vertical * step, step, 1.0], dtype=np.float32)
         prev_target_pos = self.target_tf[:3,3]
         new_target_pos = (self.target_tf @ delta)[:3]
-
-
         diff = new_target_pos - prev_target_pos
 
         # Move the arm in the environment
@@ -94,14 +101,13 @@ class CutterEnv(gym.Env):
             if realtime:
                 time.sleep(1.0/240)
 
-        return self.get_obs(), self.get_reward(), self.is_done(), {}
+        done = self.is_done()
+        return self.get_obs(), self.get_reward(done), done, {}
 
 
     def get_obs(self):
         # Grab the new image observation
         view_matrix = self.robot.get_link_kinematics('wrist_3_link-tool0_fixed_joint', as_matrix=True) @ self.current_camera_tf
-
-        # view_matrix = self.robot.get_z_offset_view_matrix('wrist_3_link-tool0_fixed_joint')
 
         _, _, rgb_img, depth_img, seg_img = pb.getCameraImage(
             width=self.width,
@@ -126,14 +132,49 @@ class CutterEnv(gym.Env):
         d = np.linalg.norm(np.array(target_loc) - np.array(cutter_loc))
         return d
 
-    def get_reward(self):
+    def target_collision_points(self, link_id=None):
+
+        """
+        WARNING! THIS ONLY WORKS ON CONVEX SHAPES!
+        """
+
+        if link_id is None:
+            link_id = self.target_id
+        else:
+            link_id = self.tree.convert_link_name(link_id)
+
+        try:
+            return self.mesh_points[link_id]
+        except KeyError:
+
+            vertices = np.array(pb.getMeshData(self.tree.robot_id, link_id)[1])
+            choice_1 = np.random.choice(len(vertices), self.mesh_num_points)
+            choice_2 = np.random.choice(len(vertices), self.mesh_num_points)
+            wgt = np.random.uniform(0, 1, size=self.mesh_num_points)
+            pts = vertices[choice_1] + (vertices[choice_2] - vertices[choice_1]) * wgt[:, np.newaxis]
+            self.mesh_points[link_id] = pts
+            return pts
+
+
+    def get_reward(self, done=False):
+
+        link_tf = self.tree.get_link_kinematics(self.target_id, as_matrix=True)
+        in_mouth = self.robot.query_ghost_body_collision('mouth', self.target_collision_points(),
+                                                         point_frame_tf=link_tf, plot_debug=False)
+
+        if self.debug and in_mouth:
+            print('[DEBUG] Branch is in mouth!')
 
         d = self.get_cutter_dist()
-
-        if d > self.min_reward_dist:
-            return 0.0
+        dist_proportion = max(1 - d / self.min_reward_dist, 0.0)
+        if done:
+            if not in_mouth:
+                return 0.0
+            else:
+                return (self.max_elapsed_time - self.elapsed_time) * dist_proportion
         else:
-            return 1 - d / self.min_reward_dist
+            ts = self.action_freq / 240.0
+            return dist_proportion * ts * (1.0 if in_mouth else 0.25)
 
 
     def is_done(self):
@@ -173,8 +214,8 @@ class CutterEnv(gym.Env):
 
 if __name__ == '__main__':
 
-    # action = 'eval'
-    action = 'train'
+    action = 'eval'
+    # action = 'train'
 
     if action == 'train':
         env = CutterEnv(159, 90, use_depth=False, use_gui=False, max_elapsed_time=2.5, max_vel=0.05)
@@ -186,7 +227,7 @@ if __name__ == '__main__':
         model.save('test_model.model')
 
     elif action == 'eval':
-        env = CutterEnv(159, 90, use_depth=False, use_gui=True, max_elapsed_time=2.5, max_vel=0.05)
+        env = CutterEnv(159, 90, use_depth=False, use_gui=True, max_elapsed_time=2.5, max_vel=0.05, debug=True)
         model = PPO("CnnPolicy", env, verbose=1)
         if os.path.exists('test_model.model'):
             model = model.load('test_model.model')
@@ -194,8 +235,8 @@ if __name__ == '__main__':
         all_dists = []
         for i in range(1000):
             action, _states = model.predict(obs, deterministic=True)
-            # action = env.action_space.sample()
-            # action = np.array([0.0, 0.0, 1.0])
+            action = env.action_space.sample()
+            # action = np.array([0.0, 0.0, -1.0])
             obs, reward, done, info = env.step(action, realtime=True)
             # env.render()
             if done:

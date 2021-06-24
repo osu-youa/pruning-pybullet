@@ -479,6 +479,24 @@
     <parent link="endpoint"/>
     <child link="cutpoint"/>
   </joint>
+<!--  <link name="cutter_mouth">-->
+<!--    <visual>-->
+<!--      <origin rpy="0 0 3.1416" xyz="0.0 0.0 0.0"/>-->
+<!--      <geometry>-->
+<!--        <mesh filename="ur5e/collision/cutter-mouth-collision.stl"/>-->
+<!--      </geometry>-->
+<!--      <material name="green">-->
+<!--        <color rgba="0 1 0 1" />-->
+<!--      </material>-->
+<!--    </visual>-->
+<!--  </link>-->
+<!--  <joint name="cutter_mouth" type="fixed">-->
+<!--    <origin rpy="0 0 0" xyz="0 0 0"/>  &lt;!&ndash; Left down out &ndash;&gt;-->
+<!--    <parent link="cutpoint"/>-->
+<!--    <child link="cutter_mouth"/>-->
+<!--  </joint>-->
+
+
 <!--  <link name="cutter_obst">-->
 <!--    <collision>-->
 <!--      <origin rpy="0 0 0" xyz="-0.008 -0.13 -0.28"/>-->
