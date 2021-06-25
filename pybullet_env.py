@@ -100,6 +100,7 @@ class CutterEnv(gym.Env):
             pb.stepSimulation(physicsClientId=self.client_id)
             if realtime:
                 time.sleep(1.0/240)
+                self.get_obs()
 
         done = self.is_done()
         return self.get_obs(), self.get_reward(done), done, {}
@@ -226,10 +227,11 @@ if __name__ == '__main__':
 
     if action == 'train':
         env = CutterEnv(159, 90, use_depth=False, use_gui=False, max_elapsed_time=2.5, max_vel=0.05, debug=False)
-        model = PPO("CnnPolicy", env, verbose=1)
+        model = PPO("CnnPolicy", env, verbose=1, device='auto')
 
         print('Learning...')
-        model.learn(total_timesteps=20000)
+
+        model.learn(total_timesteps=50000)
         print('Done learning!')
         model.save('test_model.model')
 
