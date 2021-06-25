@@ -169,18 +169,26 @@ class CutterEnv(gym.Env):
         dist_proportion = max(1 - d / self.min_reward_dist, 0.0)
         if done:
             if not in_mouth:
-                return 0.0
+                reward = 0.0
             else:
-                return (self.max_elapsed_time - self.elapsed_time) * dist_proportion
+                reward = (self.max_elapsed_time - self.elapsed_time) * dist_proportion
         else:
             ts = self.action_freq / 240.0
-            return dist_proportion * ts * (1.0 if in_mouth else 0.25)
+            reward = dist_proportion * ts * (1.0 if in_mouth else 0.25)
+
+        if self.debug:
+            print('Obtained reward: {:.3f}'.format(reward))
+
+        return reward
 
 
     def is_done(self):
         return self.elapsed_time >= self.max_elapsed_time
 
     def reset(self):
+
+        if self.elapsed_time:
+            print('Reset! (Elapsed time {:.2f}s)'.format(self.elapsed_time))
 
         self.elapsed_time = 0.0
         pb.restoreState(stateId=self.start_state, physicsClientId=self.client_id)
@@ -205,7 +213,6 @@ class CutterEnv(gym.Env):
         self.robot.reset_joint_states(ik)
 
         self.target_tf = self.robot.get_link_kinematics('cutpoint', as_matrix=True)
-        print('Reset!')
 
         return self.get_obs()
 
@@ -214,11 +221,11 @@ class CutterEnv(gym.Env):
 
 if __name__ == '__main__':
 
-    action = 'eval'
-    # action = 'train'
+    # action = 'eval'
+    action = 'train'
 
     if action == 'train':
-        env = CutterEnv(159, 90, use_depth=False, use_gui=False, max_elapsed_time=2.5, max_vel=0.05)
+        env = CutterEnv(159, 90, use_depth=False, use_gui=False, max_elapsed_time=2.5, max_vel=0.05, debug=False)
         model = PPO("CnnPolicy", env, verbose=1)
 
         print('Learning...')
@@ -235,8 +242,13 @@ if __name__ == '__main__':
         all_dists = []
         for i in range(1000):
             action, _states = model.predict(obs, deterministic=True)
-            action = env.action_space.sample()
-            # action = np.array([0.0, 0.0, -1.0])
+            # action = env.action_space.sample()
+            # if (i + 1) % 10:
+            #     action = np.array([0.0, 0.0, -1.0])
+            # else:
+            #     print('Terminating')
+            #     action = np.array([0.0, 0.0, 1.0])
+
             obs, reward, done, info = env.step(action, realtime=True)
             # env.render()
             if done:
