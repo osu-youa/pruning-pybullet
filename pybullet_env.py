@@ -47,7 +47,9 @@ class CutterEnv(gym.Env):
         self.client_id = pb.connect(pb.GUI if use_gui else pb.DIRECT)
         pb.setAdditionalSearchPath(pybullet_data.getDataPath(), physicsClientId=self.client_id)
         pb.setGravity(0, 0, -9.8, physicsClientId=self.client_id)
-        pb.loadURDF("plane.urdf", physicsClientId=self.client_id)
+        plane_id = pb.loadURDF("plane.urdf", physicsClientId=self.client_id)
+        dirt_texture = pb.loadTexture('textures/dirt.png')
+        pb.changeVisualShape(objectUniqueId=plane_id, linkIndex=-1, textureUniqueId=dirt_texture, physicsClientId=self.client_id)
 
 
         arm_location = os.path.join('robots', 'ur5e_cutter_new_calibrated_precise.urdf')
@@ -70,8 +72,14 @@ class CutterEnv(gym.Env):
         self.ideal_tool_camera_tf = np.linalg.inv(tool_tf) @ np.linalg.inv(ideal_view_matrix)
 
         scaling = 1.35
-        self.tree = URDFRobot('models/trellis-model.urdf', basePosition=[0, 0.875, 0.02 * scaling],
+        tree_y = 0.875
+        self.tree = URDFRobot('models/trellis-model.urdf', basePosition=[0, tree_y, 0.02 * scaling],
                               baseOrientation=[0, 0, 0.7071, 0.7071], globalScaling=scaling)
+
+        wall_id = pb.loadURDF("models/wall.urdf", physicsClientId=self.client_id, basePosition=[0, tree_y + 2.0, 0])
+        pb.changeVisualShape(objectUniqueId=wall_id, linkIndex=-1, textureUniqueId=pb.loadTexture('/textures/trees.png'),
+                             physicsClientId=self.client_id)
+
         self.start_state = pb.saveState(physicsClientId=self.client_id)
 
     def step(self, action, realtime=False):
@@ -100,7 +108,7 @@ class CutterEnv(gym.Env):
             pb.stepSimulation(physicsClientId=self.client_id)
             if realtime:
                 time.sleep(1.0/240)
-                self.get_obs()
+                # self.get_obs()
 
         done = self.is_done()
         return self.get_obs(), self.get_reward(done), done, {}
@@ -222,8 +230,8 @@ class CutterEnv(gym.Env):
 
 if __name__ == '__main__':
 
-    # action = 'eval'
-    action = 'train'
+    action = 'eval'
+    # action = 'train'
 
     if action == 'train':
         env = CutterEnv(159, 90, use_depth=False, use_gui=False, max_elapsed_time=2.5, max_vel=0.05, debug=False)
