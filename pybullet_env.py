@@ -230,8 +230,8 @@ class CutterEnv(gym.Env):
 
 if __name__ == '__main__':
 
-    action = 'eval'
-    # action = 'train'
+    # action = 'eval'
+    action = 'train'
 
     if action == 'train':
         env = CutterEnv(159, 90, use_depth=False, use_gui=False, max_elapsed_time=2.5, max_vel=0.05, debug=False)
@@ -244,7 +244,7 @@ if __name__ == '__main__':
         model.save('test_model.model')
 
     elif action == 'eval':
-        env = CutterEnv(159, 90, use_depth=False, use_gui=True, max_elapsed_time=2.5, max_vel=0.05, debug=True)
+        env = CutterEnv(159, 90, use_depth=False, use_gui=False, max_elapsed_time=2.5, max_vel=0.05, debug=True)
         model = PPO("CnnPolicy", env, verbose=1)
         if os.path.exists('test_model.model'):
             model = model.load('test_model.model')
