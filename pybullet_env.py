@@ -141,37 +141,6 @@ class CutterEnv(gym.Env):
             physicsClientId=self.client_id
         )
 
-
-        # import matplotlib.pyplot as plt
-        # from scipy.ndimage import sobel
-        # from skimage.color import rgb2hsv
-        # rgb_img = rgb_img[:,:,:3]
-        # greyscale = rgb_img.mean(axis=2)
-        #
-        # sobel_1 = sobel(greyscale, axis=0)
-        # sobel_2 = sobel(greyscale, axis=1)
-        #
-        # final = sobel_1 + sobel_2
-        # final = (255 * (final - np.min(final)) / (np.max(final) - np.min(final))).astype(np.uint8)
-        #
-        # plt.imshow(final, cmap='gray')
-        # plt.show()
-        #
-        # import pdb
-        # pdb.set_trace()
-        #
-        # hsv_image = rgb2hsv(rgb_img)
-        # final = np.zeros(hsv_image.shape[:2])
-        # for channel in range(3):
-        #     final = final + sobel(hsv_image[:,:,channel], axis=0)
-        #     final = final + sobel(hsv_image[:, :, channel], axis=1)
-        # final = (255 * (final - np.min(final)) / (np.max(final) - np.min(final))).astype(np.uint8)
-        # plt.imshow(final, cmap='gray')
-        # plt.show()
-        #
-        # import pdb
-        # pdb.set_trace()
-
         depth_img = None
         if self.use_depth:
             depth_img = overlay_noise(raw_depth_img, *self.current_depth_noise, convert_to_uint8=True)
