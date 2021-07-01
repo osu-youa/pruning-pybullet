@@ -12,19 +12,38 @@ import gym
 from gym import spaces
 
 
-class CutterEnv(gym.Env):
+class CutterEnvBase(gym.Env):
+    def __init__(self, width, height, use_seg=False, use_depth=False):
+        super(CutterEnvBase, self).__init__()
+
+        # Initialize gym parameters
+        num_channels = (2 if use_seg else 3) + (1 if use_depth else 0)
+        self.action_space = spaces.Box(np.array([-1.0, -1.0, -1.0]), np.array([1.0, 1.0, 1.0]),
+                                       dtype=np.float32)  # LR, UD, Terminate
+        self.observation_space = spaces.Box(low=0, high=255, shape=(height, width, num_channels), dtype=np.uint8)
+        self.model_name = 'model_{mode}{use_depth}'.format(mode='seg' if use_seg else 'rgb',
+                                                           use_depth='_depth' if use_depth else '')
+
+    def step(self, action):
+        raise NotImplementedError()
+
+    def get_obs(self):
+        raise NotImplementedError()
+
+    def reset(self):
+        raise NotImplementedError()
+
+    def render(self, mode='human'):
+        raise NotImplementedError()
+
+
+class CutterEnv(CutterEnvBase):
     """Custom Environment that follows gym interface"""
     metadata = {'render.modes': ['human']}
 
     def __init__(self, width, height, use_seg=False, use_depth=False, max_vel=0.075, action_freq=24, max_elapsed_time=3.0,
                  min_reward_dist=0.10, use_gui=False, debug=False):
-        super(CutterEnv, self).__init__()
-
-        # Initialize gym parameters
-        num_channels = (2 if use_seg else 3) + (1 if use_depth else 0)
-        self.action_space = spaces.Box(np.array([-1.0, -1.0, -1.0]), np.array([1.0, 1.0, 1.0]), dtype=np.float32)    # LR, UD, Terminate
-        self.observation_space = spaces.Box(low=0, high=255, shape=(height, width, num_channels), dtype=np.uint8)
-        self.model_name = 'model_{mode}{use_depth}'.format(mode='seg' if use_seg else 'rgb', use_depth='_depth' if use_depth else '')
+        super(CutterEnv, self).__init__(width, height, use_seg=use_seg, use_depth=use_depth)
 
         # Configuration parameters
         self.debug = debug
