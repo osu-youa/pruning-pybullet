@@ -5,6 +5,7 @@ import numpy as np
 import os
 from helloworld import URDFRobot
 from utils import PerlinNoiseBuffer, overlay_noise
+import random
 
 from stable_baselines3 import PPO
 
@@ -59,6 +60,7 @@ class CutterEnv(CutterEnvBase):
         self.mesh_num_points = 100
 
         # State parameters
+        self.target_tree = None
         self.target_id = 0
         self.target_tf = np.identity(4)
         self.elapsed_time = 0.0
@@ -79,9 +81,11 @@ class CutterEnv(CutterEnvBase):
         self.client_id = pb.connect(pb.GUI if use_gui else pb.DIRECT)
         pb.setAdditionalSearchPath(pybullet_data.getDataPath(), physicsClientId=self.client_id)
         pb.setGravity(0, 0, -9.8, physicsClientId=self.client_id)
-        plane_id = pb.loadURDF("plane.urdf", physicsClientId=self.client_id)
-        dirt_texture = pb.loadTexture('textures/dirt.png')
-        pb.changeVisualShape(objectUniqueId=plane_id, linkIndex=-1, textureUniqueId=dirt_texture, physicsClientId=self.client_id)
+        self.plane_id = pb.loadURDF("plane.urdf", physicsClientId=self.client_id)
+        plane_texture_root = os.path.join('textures', 'floor')
+        self.plane_textures = [pb.loadTexture(os.path.join(plane_texture_root, file)) for file in os.listdir(plane_texture_root)]
+
+
 
 
         arm_location = os.path.join('robots', 'ur5e_cutter_new_calibrated_precise.urdf')
@@ -112,6 +116,31 @@ class CutterEnv(CutterEnvBase):
         wall_id = pb.loadURDF("models/wall.urdf", physicsClientId=self.client_id, basePosition=[0, tree_y + 2.0, 0])
         pb.changeVisualShape(objectUniqueId=wall_id, linkIndex=-1, textureUniqueId=pb.loadTexture('/textures/trees.png'),
                              physicsClientId=self.client_id)
+
+        # Load trees - Put them in background out of sight of the camera
+
+        self.tree_model_metadata = {}
+        tree_models_directory = 'models/trees'
+        tree_model_files = [x for x in os.listdir(tree_models_directory) if x.endswith('.obj')]
+        if len(tree_model_files) < 3:
+            tree_model_files = tree_model_files * 2
+
+        for file in tree_model_files:
+            path = os.path.join(tree_models_directory, file)
+            viz = pb.createVisualShape(shapeType=pb.GEOM_MESH, fileName=path)
+
+            # # TODO: Figure out why VHACD is crashing on decomp!
+            # converted_path = path.replace('.obj', '_converted.obj')
+            # if not os.path.exists(converted_path):
+            #     print('Converting {}'.format(path))
+            #     pb.vhacd(path, converted_path, 'log.txt')
+            # col = pb.createCollisionShape(shapeType=pb.GEOM_MESH, fileName=converted_path)
+            col = pb.createCollisionShape(shapeType=pb.GEOM_BOX, halfExtents=[0.001, 0.001, 0.001])
+            tree_id = pb.createMultiBody(baseMass=1, baseVisualShapeIndex=viz, baseCollisionShapeIndex=col, basePosition=[-10, 5, 0],
+                                         baseOrientation=[0.7071, 0, 0, 0.7071])
+
+            # TODO: Load annotated metadata
+            self.tree_model_metadata[tree_id] = 0
 
         self.start_state = pb.saveState(physicsClientId=self.client_id)
 
@@ -252,6 +281,10 @@ class CutterEnv(CutterEnvBase):
         self.elapsed_time = 0.0
         pb.restoreState(stateId=self.start_state, physicsClientId=self.client_id)
 
+        # Modify the scenery
+        self.reset_trees()
+        self.randomize()
+
         # Reset the image noise parameters
 
         self.current_depth_noise = (np.random.uniform(0, self.max_depth_sigma), self.noise_buffer.get_random(), np.random.uniform(0, self.max_noise_alpha))
@@ -284,6 +317,28 @@ class CutterEnv(CutterEnvBase):
 
     def render(self, mode='human', close=False):
         print('Last dist: {:.3f}'.format(self.get_cutter_dist()))
+
+    def reset_trees(self):
+
+        all_trees = list(self.tree_model_metadata)
+        self.target_tree = all_trees[np.random.choice(len(all_trees))]
+        # TODO: COMPUTE TARGET TREE SETUP. Set BG fixed offset away
+        fg_offset = 10.0
+        pb.resetBasePositionAndOrientation(bodyUniqueId=self.target_tree, posObj=[0, fg_offset, 0], ornObj=[0.7071, 0, 0, 0.7071])
+
+        all_trees.remove(self.target_tree)
+        random.shuffle(all_trees)
+        offsets = np.arange(len(all_trees))
+        offsets = offsets - offsets.mean()
+        bg_offset = 11.0
+        for bg_tree, offset in zip(all_trees, offsets):
+            pb.resetBasePositionAndOrientation(bodyUniqueId=bg_tree, posObj=[offset, bg_offset, 0], ornObj=[0.7071, 0, 0, 0.7071])
+
+    def randomize(self):
+        # Resets a bunch of things like textures, lighting, etc.
+        pb.changeVisualShape(objectUniqueId=self.plane_id, linkIndex=-1, textureUniqueId=self.plane_textures[np.random.choice(len(self.plane_textures))],
+                             physicsClientId=self.client_id)
+
 
 if __name__ == '__main__':
 

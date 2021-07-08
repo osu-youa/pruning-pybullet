@@ -1,0 +1,7 @@
+newmtl Palo_Verde_Trunk
+Ka 0 0 0
+Ns 1
+Ks 0.996078 0.937255 0.831373
+Kd 0.207384 0.224407 0.141824
+map_Kd textures/Palo_Verde_Trunk_GreenBark_Color.png
+map_Bump textures/Palo_Verde_Trunk_GreenBarkNOR_Normal.png
