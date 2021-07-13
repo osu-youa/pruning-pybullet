@@ -4,13 +4,28 @@ import pybullet_data
 import numpy as np
 import os
 from helloworld import URDFRobot
-from utils import PerlinNoiseBuffer, overlay_noise
+# from utils import PerlinNoiseBuffer, overlay_noise
 import random
+import pickle
+from scipy.spatial.transform import Rotation
+from itertools import product
 
 from stable_baselines3 import PPO
 
 import gym
 from gym import spaces
+
+
+def homog_tf(tf, pt):
+    homog_pt = np.ones(4)
+    homog_pt[:3] = pt
+    return (tf @ homog_pt)[:3]
+
+def pose_to_tf(pos, quat):
+    tf = np.identity(4)
+    tf[:3,3] = pos
+    tf[:3,:3] = Rotation.from_quat(quat).as_matrix()
+    return tf
 
 
 class CutterEnvBase(gym.Env):
@@ -60,23 +75,30 @@ class CutterEnv(CutterEnvBase):
         self.max_vel = max_vel
         self.current_camera_tf = np.identity(4)
         self.mesh_num_points = 100
+        self.accel_threshold = 0.50         # Vector magnitude where [X,Y] are in range [-1, 1]
+        self.accel_penalty = 0.50           # For every unit accel exceeding the threshold, reduce base reward by given proportion
 
         # State parameters
-        self.target_tree = None
-        self.target_id = 0
-        self.target_tf = np.identity(4)
+        self.target_pose = None             # What pose should the cutter end up in?
+        self.target_tree = None             # Which tree model is in front?
+        self.target_id = None               # Which of the side branches are we aiming at on the target tree?
+        self.target_tf = np.identity(4)     # What is the next waypoint for the cutter?
         self.elapsed_time = 0.0
         self.mesh_points = {}
         self.last_grayscale = None
+        self.last_command = np.zeros(2)
+        self.lighting = None                # Location of light source
+
+        # EXPERIMENTAL
+        self.bg_sub = None
 
         # Simulation tools - Some are only for seg masks!
-        self.noise_buffer = PerlinNoiseBuffer(width, height, rectangle_size=30, buffer_size=50)
+        # self.noise_buffer = PerlinNoiseBuffer(width, height, rectangle_size=30, buffer_size=50)
         self.max_depth_sigma = 5.0
         self.max_tree_sigma = 5.0
         self.max_noise_alpha = 0.3
-        self.current_depth_noise = (None, None, None)       # Sigma, noise image, noise alpha
-        self.current_tree_noise = (None, None, None)
-
+        # self.current_depth_noise = (None, None, None)       # Sigma, noise image, noise alpha
+        # self.current_tree_noise = (None, None, None)
 
         # Setup Pybullet simulation
 
@@ -87,9 +109,6 @@ class CutterEnv(CutterEnvBase):
         self.plane_id = pb.loadURDF("plane.urdf", physicsClientId=self.client_id)
         plane_texture_root = os.path.join('textures', 'floor')
         self.plane_textures = [pb.loadTexture(os.path.join(plane_texture_root, file)) for file in os.listdir(plane_texture_root)]
-
-
-
 
         arm_location = os.path.join('robots', 'ur5e_cutter_new_calibrated_precise.urdf')
         home_joints = [-1.5708, -2.2689, -1.3963, 0.52360, 1.5708, 3.14159]
@@ -110,40 +129,37 @@ class CutterEnv(CutterEnvBase):
                                                             cameraUpVector=[0,0,1]), (4,4)).T
         self.ideal_tool_camera_tf = np.linalg.inv(tool_tf) @ np.linalg.inv(ideal_view_matrix)
 
-        scaling = 1.35
-        tree_y = 0.875
-        self.tree = URDFRobot('models/trellis-model.urdf', basePosition=[0, tree_y, 0.02 * scaling],
-                              baseOrientation=[0, 0, 0.7071, 0.7071], globalScaling=scaling,
-                              useFixedBase=True)
+        # Create pose database
+        target_xs = np.linspace(-0.3, 0.3, num=25, endpoint=True)
+        target_ys = np.linspace(0.75, 0.95, num=17, endpoint=True)
+        target_zs = np.linspace(0.8, 1.3, num=25, endpoint=True)
+        all_poses = [[x, y, z] + list(self.start_orientation) for x, y, z in product(target_xs, target_ys, target_zs)]
+        self.poses = self.robot.determine_reachable_target_poses('cutpoint', all_poses, home_joints)
 
-        wall_id = pb.loadURDF("models/wall.urdf", physicsClientId=self.client_id, basePosition=[0, tree_y + 2.0, 0])
-        pb.changeVisualShape(objectUniqueId=wall_id, linkIndex=-1, textureUniqueId=pb.loadTexture('/textures/trees.png'),
-                             physicsClientId=self.client_id)
+        # wall_id = pb.loadURDF("models/wall.urdf", physicsClientId=self.client_id, basePosition=[0, tree_y + 2.0, 0])
+        # pb.changeVisualShape(objectUniqueId=wall_id, linkIndex=-1, textureUniqueId=pb.loadTexture('/textures/trees.png'),
+        #                      physicsClientId=self.client_id)
 
         # Load trees - Put them in background out of sight of the camera
 
         self.tree_model_metadata = {}
-        tree_models_directory = 'models/trees'
-        tree_model_files = [x for x in os.listdir(tree_models_directory) if x.endswith('.obj')]
+        tree_models_directory = os.path.join('models', 'trees')
+        tree_model_files = [x for x in os.listdir(tree_models_directory) if x.endswith('.obj') and not '-' in x]
         if len(tree_model_files) < 3:
-            tree_model_files = tree_model_files * 2
+            tree_model_files = tree_model_files * 3
 
         for file in tree_model_files:
             path = os.path.join(tree_models_directory, file)
             viz = pb.createVisualShape(shapeType=pb.GEOM_MESH, fileName=path)
+            col = pb.createCollisionShape(shapeType=pb.GEOM_MESH, fileName=path.replace('.obj', '-collision.obj'))
 
-            # # TODO: Figure out why VHACD is crashing on decomp!
-            # converted_path = path.replace('.obj', '_converted.obj')
-            # if not os.path.exists(converted_path):
-            #     print('Converting {}'.format(path))
-            #     pb.vhacd(path, converted_path, 'log.txt')
-            # col = pb.createCollisionShape(shapeType=pb.GEOM_MESH, fileName=converted_path)
-            col = pb.createCollisionShape(shapeType=pb.GEOM_BOX, halfExtents=[0.001, 0.001, 0.001])
-            tree_id = pb.createMultiBody(baseMass=1, baseVisualShapeIndex=viz, baseCollisionShapeIndex=col, basePosition=[-10, 5, 0],
+            tree_id = pb.createMultiBody(baseMass=0, baseVisualShapeIndex=viz, baseCollisionShapeIndex=col, basePosition=[-10, 5, 0],
                                          baseOrientation=[0.7071, 0, 0, 0.7071])
+            annotation_path = path.replace('.obj', '.annotations')
+            with open(annotation_path, 'rb') as fh:
+                annotations = pickle.load(fh)
 
-            # TODO: Load annotated metadata
-            self.tree_model_metadata[tree_id] = 0
+            self.tree_model_metadata[tree_id] = annotations
 
         self.start_state = pb.saveState(physicsClientId=self.client_id)
 
@@ -153,9 +169,10 @@ class CutterEnv(CutterEnvBase):
         self.target_tf = self.robot.get_link_kinematics('cutpoint', as_matrix=True)
 
         horizontal, vertical, terminate = action
+        vel_command = np.array([horizontal, vertical])
         terminate = terminate > 0
         if terminate:
-            return self.get_obs(), self.get_reward(True), True, {}
+            return self.get_obs(), self.get_reward(vel_command, True), True, {}
 
         step = self.action_freq * self.max_vel / 240
         delta = np.array([horizontal * step, vertical * step, step, 1.0], dtype=np.float32)
@@ -176,7 +193,10 @@ class CutterEnv(CutterEnvBase):
                 # self.get_obs()
 
         done = self.is_done()
-        return self.get_obs(), self.get_reward(done), done, {}
+        reward = self.get_reward(vel_command, done)
+
+        self.last_command = vel_command
+        return self.get_obs(), reward, done, {}
 
 
     def get_obs(self):
@@ -189,6 +209,8 @@ class CutterEnv(CutterEnvBase):
             viewMatrix=np.linalg.inv(view_matrix).T.reshape(-1),
             projectionMatrix=self.proj_mat,
             renderer=pb.ER_TINY_RENDERER,
+            lightDirection=self.lighting,
+            shadow=True,
             physicsClientId=self.client_id
         )
 
@@ -196,8 +218,10 @@ class CutterEnv(CutterEnvBase):
         grayscale = rgb_img.mean(axis=2).astype(np.uint8)
         layers = []
         if self.use_seg:
+            raise NotImplementedError("Segmentation logic needs to be reimplemented")
             tree_layer_raw = (seg_img == self.tree.robot_id).astype(np.float64)
-            tree_layer = overlay_noise(tree_layer_raw, *self.current_tree_noise, convert_to_uint8=True)
+            # tree_layer = overlay_noise(tree_layer_raw, *self.current_tree_noise, convert_to_uint8=True)
+            tree_layer = (tree_layer_raw * 255).astype(np.uint8)
             robot_layer = ((seg_img == self.robot.robot_id) * 255).astype(np.uint8)
             layers.extend([tree_layer, robot_layer])
         else:
@@ -207,10 +231,12 @@ class CutterEnv(CutterEnvBase):
                 layers.append(rgb_img)
 
         if self.use_depth:
-            depth_img = overlay_noise(raw_depth_img, *self.current_depth_noise, convert_to_uint8=True)
+            depth_img = raw_depth_img
+            # depth_img = overlay_noise(raw_depth_img, *self.current_depth_noise, convert_to_uint8=True)
             layers.append(depth_img)
 
         if self.use_flow:
+            mask = self.bg_sub.apply(grayscale)
             if self.last_grayscale is None:
                 layers.append(np.zeros((self.height, self.width), dtype=np.uint8))
             else:
@@ -220,12 +246,12 @@ class CutterEnv(CutterEnvBase):
                                                     poly_n=5, poly_sigma=1.1, flags=0)
                 flow_mag = np.linalg.norm(flow, axis=2)
                 flow_img = (255 * flow_mag / flow_mag.max()).astype(np.uint8)
-                if self.debug:
-                    import matplotlib.pyplot as plt
-                    plt.imshow(grayscale, cmap='gray')
-                    plt.show()
-                    plt.imshow(flow_img, cmap='gray')
-                    plt.show()
+                # if self.debug:
+                #     import matplotlib.pyplot as plt
+                #     # plt.imshow(grayscale, cmap='gray')
+                #     # plt.show()
+                #     plt.imshow(mask, cmap='gray')
+                #     plt.show()
 
                 layers.append(flow_img)
 
@@ -234,42 +260,28 @@ class CutterEnv(CutterEnvBase):
         return np.dstack(layers)
 
 
+    @property
+    def current_tree_base_tf(self):
+        base_pos, base_quat = pb.getBasePositionAndOrientation(self.target_tree)
+        return pose_to_tf(base_pos, base_quat)
+
+    @property
+    def current_target_position(self):
+        target_loc = self.tree_model_metadata[self.target_tree][self.target_id]['position']
+        return homog_tf(self.current_tree_base_tf, target_loc)
+
     def get_cutter_dist(self):
         cutter_loc = self.robot.get_link_kinematics('cutpoint', use_com_frame=False)[0]
-        target_loc = self.tree.get_link_kinematics(self.target_id)[0]
-
+        target_loc = self.current_target_position
         d = np.linalg.norm(np.array(target_loc) - np.array(cutter_loc))
         return d
 
-    def target_collision_points(self, link_id=None):
+    def get_reward(self, command, done=False):
 
-        """
-        WARNING! THIS ONLY WORKS ON CONVEX SHAPES!
-        """
-
-        if link_id is None:
-            link_id = self.target_id
-        else:
-            link_id = self.tree.convert_link_name(link_id)
-
-        try:
-            return self.mesh_points[link_id]
-        except KeyError:
-
-            vertices = np.array(pb.getMeshData(self.tree.robot_id, link_id)[1])
-            choice_1 = np.random.choice(len(vertices), self.mesh_num_points)
-            choice_2 = np.random.choice(len(vertices), self.mesh_num_points)
-            wgt = np.random.uniform(0, 1, size=self.mesh_num_points)
-            pts = vertices[choice_1] + (vertices[choice_2] - vertices[choice_1]) * wgt[:, np.newaxis]
-            self.mesh_points[link_id] = pts
-            return pts
-
-
-    def get_reward(self, done=False):
-
-        link_tf = self.tree.get_link_kinematics(self.target_id, as_matrix=True)
-        in_mouth = self.robot.query_ghost_body_collision('mouth', self.target_collision_points(),
-                                                         point_frame_tf=link_tf, plot_debug=False)
+        base_pos, base_quat = pb.getBasePositionAndOrientation(self.target_tree)
+        base_tf = pose_to_tf(base_pos, base_quat)
+        in_mouth = self.robot.query_ghost_body_collision('mouth', self.tree_model_metadata[self.target_tree][self.target_id]['points'],
+                                                         point_frame_tf=base_tf, plot_debug=False)
 
         if self.debug and in_mouth:
             print('[DEBUG] Branch is in mouth!')
@@ -282,8 +294,11 @@ class CutterEnv(CutterEnvBase):
             else:
                 reward = (self.max_elapsed_time - self.elapsed_time) * dist_proportion
         else:
+            accel = np.linalg.norm(command - self.last_command)
+            accel_multiplier = 1.0 - max(0, accel - self.accel_threshold) * self.accel_penalty
+
             ts = self.action_freq / 240.0
-            reward = dist_proportion * ts * (1.0 if in_mouth else 0.25)
+            reward = dist_proportion * ts * (1.0 if in_mouth else 0.25) * accel_multiplier
 
         if self.debug:
             print('Obtained reward: {:.3f}'.format(reward))
@@ -302,6 +317,12 @@ class CutterEnv(CutterEnvBase):
         self.elapsed_time = 0.0
         pb.restoreState(stateId=self.start_state, physicsClientId=self.client_id)
 
+        self.last_command = np.zeros(2)
+
+        # DEBUG: EXPERIMENTAL
+        import cv2
+        self.bg_sub = cv2.createBackgroundSubtractorMOG2()
+
         # Modify the scenery
         self.reset_trees()
         self.randomize()
@@ -309,8 +330,8 @@ class CutterEnv(CutterEnvBase):
         # Reset the image noise parameters
 
         self.last_grayscale = None
-        self.current_depth_noise = (np.random.uniform(0, self.max_depth_sigma), self.noise_buffer.get_random(), np.random.uniform(0, self.max_noise_alpha))
-        self.current_tree_noise = (np.random.uniform(0, self.max_tree_sigma), self.noise_buffer.get_random(), np.random.uniform(0, self.max_noise_alpha))
+        # self.current_depth_noise = (np.random.uniform(0, self.max_depth_sigma), self.noise_buffer.get_random(), np.random.uniform(0, self.max_noise_alpha))
+        # self.current_tree_noise = (np.random.uniform(0, self.max_tree_sigma), self.noise_buffer.get_random(), np.random.uniform(0, self.max_noise_alpha))
 
         # Compute a random for the camera transform
 
@@ -322,15 +343,14 @@ class CutterEnv(CutterEnvBase):
         noise_tf[:3,:3] = np.reshape(pb.getMatrixFromQuaternion(quat), (3,3))
         self.current_camera_tf = self.ideal_tool_camera_tf @ noise_tf
 
-        # Pick a target on the tree
-        self.target_id = np.random.randint(len(self.tree.joint_names_to_ids))
-        target_pos = self.tree.get_link_kinematics(self.target_id)[0]
-
-        # Find valid IKs for it
-        robot_start_pos = target_pos - np.array([0, np.random.uniform(0.08, 0.12), 0])
-        robot_start_pos += np.random.uniform(-0.05, 0.05, 3) * np.array([1, 0, 1])
-
-        ik = self.robot.solve_end_effector_ik('cutpoint', robot_start_pos, self.start_orientation)
+        # From the selected target on the tree (computed in reset_trees()), figure out the offset for the cutters
+        # Convert to world pose and then solve for the IKs
+        tf = pose_to_tf(self.target_pose[:3], self.target_pose[3:])
+        offset = np.array([np.random.uniform(-0.05, 0.05),
+                           np.random.uniform(-0.05, 0.05),
+                           np.random.uniform(-0.02, 0.02) - 0.15]) * np.array([0.0, 0.0, 1.0])
+        cutter_start_pos = homog_tf(tf, offset)
+        ik = self.robot.solve_end_effector_ik('cutpoint', cutter_start_pos, self.start_orientation)
         self.robot.reset_joint_states(ik)
 
         self.target_tf = self.robot.get_link_kinematics('cutpoint', as_matrix=True)
@@ -342,26 +362,48 @@ class CutterEnv(CutterEnvBase):
 
     def reset_trees(self):
 
+        # Select one of the trees from the tree model metadata
         all_trees = list(self.tree_model_metadata)
         self.target_tree = all_trees[np.random.choice(len(all_trees))]
-        # TODO: COMPUTE TARGET TREE SETUP. Set BG fixed offset away
-        fg_offset = 10.0
-        pb.resetBasePositionAndOrientation(bodyUniqueId=self.target_tree, posObj=[0, fg_offset, 0], ornObj=[0.7071, 0, 0, 0.7071])
-
         all_trees.remove(self.target_tree)
         random.shuffle(all_trees)
+
+        # From the tree, select one of the targets
+        self.target_id = np.random.randint(len(self.tree_model_metadata[self.target_tree]))
+
+        # Select a random pose from the list of random poses
+        self.target_pose = self.poses[np.random.randint(len(self.poses))]
+
+        # Based on the target pose and the corresponding target, figure out where the base of the tree is (may clip through floor)
+        tree_frame_pt = self.tree_model_metadata[self.target_tree][self.target_id]['position']
+        target_tree_target_tf = np.identity(4)
+        target_tree_target_tf[:3,3] = self.target_pose[:3]
+        target_tree_target_tf[:3,:3] = Rotation.from_quat([0.7071, 0, 0, 0.7071]).as_matrix()
+        base_loc = homog_tf(target_tree_target_tf, -tree_frame_pt)
+
+        pb.resetBasePositionAndOrientation(bodyUniqueId=self.target_tree, posObj=base_loc, ornObj=[0.7071, 0, 0, 0.7071])
+
+        ROW_SPACING = 2.0
         offsets = np.arange(len(all_trees))
-        offsets = offsets - offsets.mean()
-        bg_offset = 11.0
+        offsets = (offsets - offsets.mean()) * 2
+        bg_offset = base_loc[1] + ROW_SPACING
         for bg_tree, offset in zip(all_trees, offsets):
-            pb.resetBasePositionAndOrientation(bodyUniqueId=bg_tree, posObj=[offset, bg_offset, 0], ornObj=[0.7071, 0, 0, 0.7071])
+            base_offset = np.array([np.random.uniform(-0.10, 0.10) + offset, np.random.uniform(-0.10, 0.10) + bg_offset, 0])
+            pb.resetBasePositionAndOrientation(bodyUniqueId=bg_tree, posObj=base_offset, ornObj=[0.7071, 0, 0, 0.7071])
 
     def randomize(self):
-        # Resets a bunch of things like textures, lighting, etc.
+        # Resets ground texture
         pb.changeVisualShape(objectUniqueId=self.plane_id, linkIndex=-1, textureUniqueId=self.plane_textures[np.random.choice(len(self.plane_textures))],
                              physicsClientId=self.client_id)
 
-        # TODO: Randomize lighting
+
+
+        self.lighting = np.random.uniform(-1.0, 1.0, 3)
+        self.lighting[2] = np.abs(self.lighting[2])
+        self.lighting *= np.random.uniform(8.0, 16.0) / np.linalg.norm(self.lighting)
+
+        # TODO: Randomize exposure, loaded robot model, etc.
+
 
 
 if __name__ == '__main__':
@@ -387,7 +429,7 @@ if __name__ == '__main__':
 
     elif action == 'eval':
         # env = CutterEnv(159, 90, use_seg=use_seg, use_depth=use_depth, use_gui=True, max_elapsed_time=2.5, max_vel=0.05, debug=True)
-        env = CutterEnv(159, 90, grayscale=grayscale, use_seg=use_seg, use_depth=use_depth, use_flow=use_flow,
+        env = CutterEnv(318, 180, grayscale=grayscale, use_seg=use_seg, use_depth=use_depth, use_flow=use_flow,
                         use_gui=True, max_elapsed_time=1.0, max_vel=0.05, debug=True)
         model = PPO("CnnPolicy", env, verbose=1)
         model_file = '{}.model'.format(env.model_name)
@@ -396,13 +438,13 @@ if __name__ == '__main__':
         obs = env.reset()
         all_dists = []
         for i in range(1000):
-            action, _states = model.predict(obs, deterministic=True)
+            # action, _states = model.predict(obs, deterministic=True)
             # action = env.action_space.sample()
-            # if (i + 1) % 10:
-            #     action = np.array([0.0, 0.0, -1.0])
-            # else:
-            #     print('Terminating')
-            #     action = np.array([0.0, 0.0, 1.0])
+            if (i + 1) % 5:
+                action = np.array([0.0, 0.0, -1.0])
+            else:
+                print('Terminating')
+                action = np.array([0.0, 0.0, 1.0])
 
             obs, reward, done, info = env.step(action, realtime=True)
             # env.render()

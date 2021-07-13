@@ -91,11 +91,13 @@ class URDFRobot:
                                     cameraUpVector=[0, 0, 1])
 
 
-    def solve_end_effector_ik(self, link_name_or_id, target_position, target_orientation=None):
+    def solve_end_effector_ik(self, link_name_or_id, target_position, target_orientation=None, threshold=None):
         link_id = self.convert_link_name(link_name_or_id)
         kwargs = {'targetPosition': target_position}
         if target_orientation is not None:
             kwargs['targetOrientation'] = target_orientation
+        if threshold is not None:
+            kwargs['residualThreshold'] = threshold
         return pb.calculateInverseKinematics(self.robot_id, link_id, **kwargs)
 
     def set_control_target(self, targets, control_type=pb.POSITION_CONTROL, include_prismatic=False):
@@ -105,6 +107,64 @@ class URDFRobot:
     def enable_force_torque_readings(self, joint_name):
         joint_id = self.joint_names_to_ids[joint_name]
         pb.enableJointForceTorqueSensor(self.robot_id, joint_id, True)
+
+    def determine_reachable_target_poses(self, frame, pose_list, base_ik):
+        """
+        Given a list of poses, determines whether there exists an IK solution
+        that is sufficiently close, and which also has an offset position with a sufficiently close IK solution.
+        :param pose_list: A list of poses in [px py pz qx qy qz qw] form
+        :param base_ik: A starting solution for the IK solver.
+        :return:
+        """
+
+        POSITION_TOLERANCE = 0.005
+        ORIENTATION_TOLERANCE = 0.0025
+        SUM_ABS_DIFF_TOLERANCE = np.pi * 2/3
+
+        valid = []
+        for pose in pose_list:
+            pose = np.array(pose)
+            pos_target = pose[:3]
+            quat_target = pose[3:7]
+
+            self.reset_joint_states(base_ik)
+            ik = np.array(self.solve_end_effector_ik(frame, pos_target, quat_target, threshold=POSITION_TOLERANCE))
+            self.reset_joint_states(ik)
+            pos, quat = self.get_link_kinematics(frame, as_matrix=False)
+            d_pos = np.linalg.norm(pos_target - pos)
+            d_quat = np.linalg.norm(quat_target - quat)
+            if d_pos > POSITION_TOLERANCE or d_quat > ORIENTATION_TOLERANCE:
+                continue
+
+            #
+            # pose_mat = np.identity(4)
+            # pose_mat[:3,3] = pos_target
+            # pose_mat[:3,:3] = Rotation.from_quat(quat_target).as_matrix()
+            # homog = np.ones(4)
+            # homog[:3] = vector_offset
+            # pos_app = (pose_mat @ homog)[:3]
+            #
+            #
+            #
+            # ik_app = np.array(self.solve_end_effector_ik(frame, pos_app, quat_target, threshold=POSITION_TOLERANCE))
+            # self.reset_joint_states(ik_app)
+            # pos, quat = self.get_link_kinematics(frame, as_matrix=False)
+            # d_pos = np.linalg.norm(pos_app - pos)
+            # d_quat = np.linalg.norm(quat_target - quat)
+            # d_iks = np.abs(ik_app - ik).sum()
+            #
+            # if d_pos > POSITION_TOLERANCE or d_quat > ORIENTATION_TOLERANCE or d_iks > SUM_ABS_DIFF_TOLERANCE:
+            #     continue
+            #
+            #
+
+            valid.append(pose)
+
+        if not valid:
+            raise Exception("WTF")
+
+        return valid
+
 
     def attach_ghost_body_from_file(self, file_name, name, joint_attachment, xyz=None, rpy=None):
         """
