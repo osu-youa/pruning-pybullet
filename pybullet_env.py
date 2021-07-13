@@ -92,9 +92,6 @@ class CutterEnv(CutterEnvBase):
         self.lighting = None                # Location of light source
         self.contrast = None                # Contrast adjustment factor
 
-        # EXPERIMENTAL
-        self.bg_sub = None
-
         # Simulation tools - Some are only for seg masks!
         # self.noise_buffer = PerlinNoiseBuffer(width, height, rectangle_size=30, buffer_size=50)
         self.max_depth_sigma = 5.0
@@ -185,7 +182,7 @@ class CutterEnv(CutterEnvBase):
 
         # Move the arm in the environment
         self.elapsed_time += self.action_freq / 240
-        img_update_frames = range(self.action_freq - 1, 0, -self.frames_per_img)
+        img_update_frames = range(self.action_freq, 0, -self.frames_per_img)
         for i in range(self.action_freq):
             target_pos = prev_target_pos + (i + 1) / self.action_freq * diff
             self.target_tf[:3, 3] = target_pos
@@ -198,7 +195,6 @@ class CutterEnv(CutterEnvBase):
 
             if realtime:
                 time.sleep(1.0/240)
-                # self.get_obs()
 
         done = self.is_done()
         reward = self.get_reward(vel_command, done)
@@ -248,7 +244,6 @@ class CutterEnv(CutterEnvBase):
             layers.append(depth_img)
 
         if self.use_flow:
-            mask = self.bg_sub.apply(grayscale)
             if self.last_grayscale is None:
                 layers.append(np.zeros((self.height, self.width), dtype=np.uint8))
             else:
@@ -331,10 +326,6 @@ class CutterEnv(CutterEnvBase):
         pb.restoreState(stateId=self.start_state, physicsClientId=self.client_id)
 
         self.last_command = np.zeros(2)
-
-        # DEBUG: EXPERIMENTAL
-        import cv2
-        self.bg_sub = cv2.createBackgroundSubtractorMOG2()
 
         # Modify the scenery
         self.reset_trees()
