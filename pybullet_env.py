@@ -9,6 +9,7 @@ import random
 import pickle
 from scipy.spatial.transform import Rotation
 from itertools import product
+from PIL import Image, ImageEnhance
 
 from stable_baselines3 import PPO
 
@@ -77,6 +78,7 @@ class CutterEnv(CutterEnvBase):
         self.mesh_num_points = 100
         self.accel_threshold = 0.50         # Vector magnitude where [X,Y] are in range [-1, 1]
         self.accel_penalty = 0.50           # For every unit accel exceeding the threshold, reduce base reward by given proportion
+        self.frames_per_img = 8             # Corresponds to 30 Hz
 
         # State parameters
         self.target_pose = None             # What pose should the cutter end up in?
@@ -88,6 +90,7 @@ class CutterEnv(CutterEnvBase):
         self.last_grayscale = None
         self.last_command = np.zeros(2)
         self.lighting = None                # Location of light source
+        self.contrast = None                # Contrast adjustment factor
 
         # EXPERIMENTAL
         self.bg_sub = None
@@ -182,12 +185,17 @@ class CutterEnv(CutterEnvBase):
 
         # Move the arm in the environment
         self.elapsed_time += self.action_freq / 240
+        img_update_frames = range(self.action_freq - 1, 0, -self.frames_per_img)
         for i in range(self.action_freq):
             target_pos = prev_target_pos + (i + 1) / self.action_freq * diff
             self.target_tf[:3, 3] = target_pos
             ik = self.robot.solve_end_effector_ik('cutpoint', target_pos, self.start_orientation)
             self.robot.set_control_target(ik)
             pb.stepSimulation(physicsClientId=self.client_id)
+
+            if i in img_update_frames:
+                self.get_obs()
+
             if realtime:
                 time.sleep(1.0/240)
                 # self.get_obs()
@@ -215,6 +223,10 @@ class CutterEnv(CutterEnvBase):
         )
 
         rgb_img = rgb_img[:,:,:3]
+        pil_img = Image.fromarray(rgb_img, 'RGB')
+        enhancer = ImageEnhance.Contrast(pil_img)
+        rgb_img = np.asarray(enhancer.enhance(self.contrast))
+
         grayscale = rgb_img.mean(axis=2).astype(np.uint8)
         layers = []
         if self.use_seg:
@@ -246,6 +258,7 @@ class CutterEnv(CutterEnvBase):
                                                     poly_n=5, poly_sigma=1.1, flags=0)
                 flow_mag = np.linalg.norm(flow, axis=2)
                 flow_img = (255 * flow_mag / flow_mag.max()).astype(np.uint8)
+
                 # if self.debug:
                 #     import matplotlib.pyplot as plt
                 #     # plt.imshow(grayscale, cmap='gray')
@@ -401,6 +414,7 @@ class CutterEnv(CutterEnvBase):
         self.lighting = np.random.uniform(-1.0, 1.0, 3)
         self.lighting[2] = np.abs(self.lighting[2])
         self.lighting *= np.random.uniform(8.0, 16.0) / np.linalg.norm(self.lighting)
+        self.contrast = np.random.uniform(0.5, 2.0)
 
         # TODO: Randomize exposure, loaded robot model, etc.
 
