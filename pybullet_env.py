@@ -12,6 +12,10 @@ from itertools import product
 from PIL import Image, ImageEnhance
 
 from stable_baselines3 import PPO
+from stable_baselines3.common.callbacks import EvalCallback
+from stable_baselines3.common.vec_env import VecTransposeImage, SubprocVecEnv, DummyVecEnv
+from stable_baselines3.common.monitor import Monitor
+from functools import partial
 
 import gym
 from gym import spaces
@@ -30,16 +34,17 @@ def pose_to_tf(pos, quat):
 
 
 class CutterEnvBase(gym.Env):
-    def __init__(self, width, height, grayscale=False, use_seg=False, use_depth=False, use_flow=False):
+    def __init__(self, width, height, grayscale=False, use_seg=False, use_depth=False, use_flow=False, use_last_frame=False):
         super(CutterEnvBase, self).__init__()
 
         # Initialize gym parameters
-        num_channels = (2 if use_seg else (1 if grayscale else 3)) + (1 if use_depth else 0) + (1 if use_flow else 0)
+        num_channels = (2 if use_seg else (1 if grayscale else 3)) + (1 if use_depth else 0) + (1 if use_flow else 0) + (1 if use_last_frame else 0)
         self.action_space = spaces.Box(np.array([-1.0, -1.0, -1.0]), np.array([1.0, 1.0, 1.0]),
                                        dtype=np.float32)  # LR, UD, Terminate
         self.observation_space = spaces.Box(low=0, high=255, shape=(height, width, num_channels), dtype=np.uint8)
-        self.model_name = 'model_{mode}{use_depth}{flow}'.format(mode='seg' if use_seg else ('gray' if grayscale else 'rgb'),
-                                                           use_depth='_depth' if use_depth else '', flow='_flow' if use_flow else '')
+        self.model_name = 'model_{mode}{use_depth}{flow}{uselast}'.format(mode='seg' if use_seg else ('gray' if grayscale else 'rgb'),
+                                                           use_depth='_depth' if use_depth else '', flow='_flow' if use_flow else '',
+                                                                          uselast='_uselastframe' if use_last_frame else '')
 
     def step(self, action):
         raise NotImplementedError()
@@ -58,9 +63,9 @@ class CutterEnv(CutterEnvBase):
     """Custom Environment that follows gym interface"""
     metadata = {'render.modes': ['human']}
 
-    def __init__(self, width, height, grayscale=False, use_seg=False, use_depth=False, use_flow=False, max_vel=0.075, action_freq=24, max_elapsed_time=3.0,
+    def __init__(self, width, height, grayscale=False, use_seg=False, use_depth=False, use_flow=False, use_last_frame=False, max_vel=0.075, action_freq=24, max_elapsed_time=3.0,
                  min_reward_dist=0.10, use_gui=False, debug=False):
-        super(CutterEnv, self).__init__(width, height, grayscale=grayscale, use_seg=use_seg, use_depth=use_depth, use_flow=use_flow)
+        super(CutterEnv, self).__init__(width, height, grayscale=grayscale, use_seg=use_seg, use_depth=use_depth, use_flow=use_flow, use_last_frame=use_last_frame)
 
         # Configuration parameters
         self.debug = debug
@@ -70,6 +75,7 @@ class CutterEnv(CutterEnvBase):
         self.use_seg = use_seg
         self.use_depth = use_depth
         self.use_flow = use_flow
+        self.use_last_frame = use_last_frame
         self.action_freq = action_freq
         self.max_elapsed_time = max_elapsed_time
         self.min_reward_dist = min_reward_dist
@@ -108,11 +114,11 @@ class CutterEnv(CutterEnvBase):
         pb.setGravity(0, 0, -9.8, physicsClientId=self.client_id)
         self.plane_id = pb.loadURDF("plane.urdf", physicsClientId=self.client_id)
         plane_texture_root = os.path.join('textures', 'floor')
-        self.plane_textures = [pb.loadTexture(os.path.join(plane_texture_root, file)) for file in os.listdir(plane_texture_root)]
+        self.plane_textures = [pb.loadTexture(os.path.join(plane_texture_root, file), physicsClientId=self.client_id) for file in os.listdir(plane_texture_root)]
 
         arm_location = os.path.join('robots', 'ur5e_cutter_new_calibrated_precise.urdf')
         home_joints = [-1.5708, -2.2689, -1.3963, 0.52360, 1.5708, 3.14159]
-        self.robot = URDFRobot(arm_location, [0, 0, 0.02], pb.getQuaternionFromEuler([0, 0, 0]))
+        self.robot = URDFRobot(arm_location, [0, 0, 0.02], [0, 0, 0, 1], physicsClientId=self.client_id)
         self.robot.reset_joint_states(home_joints)
         self.start_orientation = self.robot.get_link_kinematics('cutpoint')[1]
         self.proj_mat = pb.computeProjectionMatrixFOV(
@@ -150,11 +156,11 @@ class CutterEnv(CutterEnvBase):
 
         for file in tree_model_files:
             path = os.path.join(tree_models_directory, file)
-            viz = pb.createVisualShape(shapeType=pb.GEOM_MESH, fileName=path)
-            col = pb.createCollisionShape(shapeType=pb.GEOM_MESH, fileName=path.replace('.obj', '-collision.obj'))
+            viz = pb.createVisualShape(shapeType=pb.GEOM_MESH, fileName=path, physicsClientId=self.client_id)
+            col = pb.createCollisionShape(shapeType=pb.GEOM_MESH, fileName=path.replace('.obj', '-collision.obj'), physicsClientId=self.client_id)
 
             tree_id = pb.createMultiBody(baseMass=0, baseVisualShapeIndex=viz, baseCollisionShapeIndex=col, basePosition=[-10, 5, 0],
-                                         baseOrientation=[0.7071, 0, 0, 0.7071])
+                                         baseOrientation=[0.7071, 0, 0, 0.7071], physicsClientId=self.client_id)
             annotation_path = path.replace('.obj', '.annotations')
             with open(annotation_path, 'rb') as fh:
                 annotations = pickle.load(fh)
@@ -263,6 +269,9 @@ class CutterEnv(CutterEnvBase):
 
                 layers.append(flow_img)
 
+        if self.use_last_frame:
+            layers.append(self.last_grayscale if self.last_grayscale is not None else np.zeros((self.height, self.width), dtype=np.uint8))
+
         self.last_grayscale = grayscale
 
         return np.dstack(layers)
@@ -270,7 +279,7 @@ class CutterEnv(CutterEnvBase):
 
     @property
     def current_tree_base_tf(self):
-        base_pos, base_quat = pb.getBasePositionAndOrientation(self.target_tree)
+        base_pos, base_quat = pb.getBasePositionAndOrientation(self.target_tree, physicsClientId=self.client_id)
         return pose_to_tf(base_pos, base_quat)
 
     @property
@@ -286,7 +295,7 @@ class CutterEnv(CutterEnvBase):
 
     def get_reward(self, command, done=False):
 
-        base_pos, base_quat = pb.getBasePositionAndOrientation(self.target_tree)
+        base_pos, base_quat = pb.getBasePositionAndOrientation(self.target_tree, physicsClientId=self.client_id)
         base_tf = pose_to_tf(base_pos, base_quat)
         in_mouth = self.robot.query_ghost_body_collision('mouth', self.tree_model_metadata[self.target_tree][self.target_id]['points'],
                                                          point_frame_tf=base_tf, plot_debug=False)
@@ -341,10 +350,9 @@ class CutterEnv(CutterEnvBase):
 
         xyz_noise = np.random.uniform(-0.0025, 0.0025, size=3)
         rpy_noise = np.random.uniform(-np.radians(2.5), np.radians(2.5), size=3)
-        quat = pb.getQuaternionFromEuler(rpy_noise)
         noise_tf = np.identity(4)
         noise_tf[:3,3] = xyz_noise
-        noise_tf[:3,:3] = np.reshape(pb.getMatrixFromQuaternion(quat), (3,3))
+        noise_tf[:3,:3] = Rotation.from_euler('xyz', rpy_noise, degrees=False).as_matrix()
         self.current_camera_tf = self.ideal_tool_camera_tf @ noise_tf
 
         # From the selected target on the tree (computed in reset_trees()), figure out the offset for the cutters
@@ -385,7 +393,7 @@ class CutterEnv(CutterEnvBase):
         target_tree_target_tf[:3,:3] = Rotation.from_quat([0.7071, 0, 0, 0.7071]).as_matrix()
         base_loc = homog_tf(target_tree_target_tf, -tree_frame_pt)
 
-        pb.resetBasePositionAndOrientation(bodyUniqueId=self.target_tree, posObj=base_loc, ornObj=[0.7071, 0, 0, 0.7071])
+        pb.resetBasePositionAndOrientation(bodyUniqueId=self.target_tree, posObj=base_loc, ornObj=[0.7071, 0, 0, 0.7071], physicsClientId=self.client_id)
 
         ROW_SPACING = 2.0
         offsets = np.arange(len(all_trees))
@@ -393,7 +401,7 @@ class CutterEnv(CutterEnvBase):
         bg_offset = base_loc[1] + ROW_SPACING
         for bg_tree, offset in zip(all_trees, offsets):
             base_offset = np.array([np.random.uniform(-0.10, 0.10) + offset, np.random.uniform(-0.10, 0.10) + bg_offset, 0])
-            pb.resetBasePositionAndOrientation(bodyUniqueId=bg_tree, posObj=base_offset, ornObj=[0.7071, 0, 0, 0.7071])
+            pb.resetBasePositionAndOrientation(bodyUniqueId=bg_tree, posObj=base_offset, ornObj=[0.7071, 0, 0, 0.7071], physicsClientId=self.client_id)
 
     def randomize(self):
         # Resets ground texture
@@ -413,28 +421,45 @@ class CutterEnv(CutterEnvBase):
 
 if __name__ == '__main__':
 
-    action = 'eval'
-    # action = 'train'
-    grayscale = True
+    # action = 'eval'
+    action = 'train'
+    width = 318
+    height = 180
+    grayscale = False
     use_seg = False
     use_depth = False
-    use_flow=True
+    use_flow = False
+    use_last_frame = True
+    num_envs = 3
 
     if action == 'train':
-        env = CutterEnv(159, 90, grayscale=grayscale, use_seg=use_seg, use_depth=use_depth, use_flow=use_flow,
-                        use_gui=False, max_elapsed_time=2.5, max_vel=0.05, debug=False)
-        model_file = '{}.model'.format(env.model_name)
+
+
+        def make_env(monitor=False):
+            env = CutterEnv(width, height, grayscale=grayscale, use_seg=use_seg, use_depth=use_depth, use_flow=use_flow,
+                             use_last_frame=use_last_frame, use_gui=False, max_elapsed_time=2.5, max_vel=0.05, debug=False)
+            if monitor:
+                env = Monitor(env)
+            return env
+
+        env = VecTransposeImage(SubprocVecEnv([make_env] * num_envs))
+        eval_env = (VecTransposeImage(DummyVecEnv([partial(make_env, monitor=True)])))
+
+        eval_callback = EvalCallback(eval_env, best_model_save_path='./', log_path='./', eval_freq=1000, n_eval_episodes=10,
+                                     deterministic=True, render=False)
+
+        # model_file = '{}.model'.format(eval_env.model_name)
         model = PPO("CnnPolicy", env, verbose=1, device='auto')
 
         print('Learning...')
 
-        model.learn(total_timesteps=50000)
+        model.learn(total_timesteps=50000, callback=eval_callback)
         print('Done learning!')
-        model.save(model_file)
+        # model.save(model_file)
 
     elif action == 'eval':
         # env = CutterEnv(159, 90, use_seg=use_seg, use_depth=use_depth, use_gui=True, max_elapsed_time=2.5, max_vel=0.05, debug=True)
-        env = CutterEnv(318, 180, grayscale=grayscale, use_seg=use_seg, use_depth=use_depth, use_flow=use_flow,
+        env = CutterEnv(width, height, grayscale=grayscale, use_seg=use_seg, use_depth=use_depth, use_flow=use_flow, use_last_frame=use_last_frame,
                         use_gui=True, max_elapsed_time=1.0, max_vel=0.05, debug=True)
         model = PPO("CnnPolicy", env, verbose=1)
         model_file = '{}.model'.format(env.model_name)

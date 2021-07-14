@@ -255,7 +255,7 @@ if __name__ == '__main__':
 
     # Load in the arm and configure the joint control
     startPos = [0,0,0.02]
-    startOrientation = pb.getQuaternionFromEuler([0, 0, 0])
+    startOrientation = [0,0,0,1]
 
     home_joints = [-1.5708, -2.2689, -1.3963, 0.52360, 1.5708, 3.14159]
     robot = URDFRobot(arm_location, startPos, startOrientation)
