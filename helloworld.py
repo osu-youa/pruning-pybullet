@@ -16,16 +16,18 @@ from mpl_toolkits import mplot3d
 class URDFRobot:
     def __init__(self, urdf_path, *args, **kwargs):
         self.robot_id = pb.loadURDF(urdf_path, *args, **kwargs)
-        self.joint_names_to_ids = {}
-        self.num_joints = pb.getNumJoints(self.robot_id)
-        self.joint_limits = {}
+        self.client_kwarg = {}
+        if 'physicsClientId' in kwargs:
+            self.client_kwarg['physicsClientId'] = kwargs['physicsClientId']
 
+        self.joint_names_to_ids = {}
+        self.num_joints = pb.getNumJoints(self.robot_id, **self.client_kwarg)
+        self.joint_limits = {}
         self.revolute_joints = []
         self.revolute_and_prismatic_joints = []
 
-
         for i_joint in range(self.num_joints):
-            joint_info = pb.getJointInfo(self.robot_id, i_joint)
+            joint_info = pb.getJointInfo(self.robot_id, i_joint, **self.client_kwarg)
             joint_name = joint_info[1].decode('utf8')
             joint_type = joint_info[2]
             joint_limits = (joint_info[8], joint_info[9])
@@ -55,11 +57,11 @@ class URDFRobot:
             limit_low, limit_high = self.joint_limits[joint_id]
             if not limit_low <= position <= limit_high:
                 raise ValueError("For joint {}, desired position {:.3f} is not in limits [{:.3f}, {:.3f}]".format(joint_id, position, limit_low, limit_high))
-            pb.resetJointState(self.robot_id, joint_id, position, velocity)
+            pb.resetJointState(self.robot_id, joint_id, position, velocity, **self.client_kwarg)
 
 
     def get_force_reading(self, joint):
-        return pb.getJointState(self.robot_id, self.joint_names_to_ids[joint])[2]
+        return pb.getJointState(self.robot_id, self.joint_names_to_ids[joint], **self.client_kwarg)[2]
 
     def get_link_kinematics(self, link_name_or_id, use_com_frame=False, as_matrix=False):
 
@@ -71,12 +73,12 @@ class URDFRobot:
             pos_idx = 0
             quat_idx = 1
 
-        rez = pb.getLinkState(self.robot_id, link_id, computeForwardKinematics=True)
+        rez = pb.getLinkState(self.robot_id, link_id, computeForwardKinematics=True, **self.client_kwarg)
         position, orientation = rez[pos_idx], rez[quat_idx]
 
         if as_matrix:
             tf = np.identity(4)
-            tf[:3, :3] = np.array(pb.getMatrixFromQuaternion(orientation)).reshape((3, 3))
+            tf[:3, :3] = Rotation.from_quat(orientation).as_matrix()
             tf[:3, 3] = position
             return tf
         else:
@@ -98,15 +100,15 @@ class URDFRobot:
             kwargs['targetOrientation'] = target_orientation
         if threshold is not None:
             kwargs['residualThreshold'] = threshold
-        return pb.calculateInverseKinematics(self.robot_id, link_id, **kwargs)
+        return pb.calculateInverseKinematics(self.robot_id, link_id, **kwargs, **self.client_kwarg)
 
     def set_control_target(self, targets, control_type=pb.POSITION_CONTROL, include_prismatic=False):
         joint_ids = self.revolute_and_prismatic_joints if include_prismatic else self.revolute_joints
-        pb.setJointMotorControlArray(self.robot_id, joint_ids, control_type, targetPositions=targets)
+        pb.setJointMotorControlArray(self.robot_id, joint_ids, control_type, targetPositions=targets, **self.client_kwarg)
 
     def enable_force_torque_readings(self, joint_name):
         joint_id = self.joint_names_to_ids[joint_name]
-        pb.enableJointForceTorqueSensor(self.robot_id, joint_id, True)
+        pb.enableJointForceTorqueSensor(self.robot_id, joint_id, True, **self.client_kwarg)
 
     def determine_reachable_target_poses(self, frame, pose_list, base_ik):
         """
@@ -181,10 +183,9 @@ class URDFRobot:
         if rpy is None:
             rpy = np.zeros(3)
 
-        quat = Rotation.from_euler('xyz', rpy, degrees=False).as_quat()
         tf = np.identity(4)
         tf[:3,3] = xyz
-        tf[:3,:3] = np.reshape(pb.getMatrixFromQuaternion(quat), (3,3))
+        tf[:3,:3] = Rotation.from_euler('xyz', rpy, degrees=False).as_matrix()
 
         self.ghost_body_tfs[name] = (joint_attachment, tf)
 

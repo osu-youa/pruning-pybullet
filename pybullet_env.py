@@ -453,9 +453,9 @@ if __name__ == '__main__':
     if action == 'train':
 
 
-        def make_env(monitor=False):
+        def make_env(monitor=False, with_gui=False):
             env = CutterEnv(width, height, grayscale=grayscale, use_seg=use_seg, use_depth=use_depth, use_flow=use_flow,
-                             use_last_frame=use_last_frame, use_gui=False, max_elapsed_time=2.5, max_vel=0.05, debug=False)
+                             use_last_frame=use_last_frame, use_gui=with_gui, max_elapsed_time=2.5, max_vel=0.05, debug=False)
             if monitor:
                 env = Monitor(env)
             return env
