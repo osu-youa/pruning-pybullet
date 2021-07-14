@@ -17,6 +17,8 @@ from stable_baselines3.common.vec_env import VecTransposeImage, SubprocVecEnv, D
 from stable_baselines3.common.monitor import Monitor
 from functools import partial
 
+import matplotlib.pyplot as plt
+
 import gym
 from gym import spaces
 
@@ -169,6 +171,15 @@ class CutterEnv(CutterEnvBase):
 
         self.start_state = pb.saveState(physicsClientId=self.client_id)
 
+        # Image debugging utils via matplotlib
+        if self.gui:
+            plt.ion()
+            self.fig = plt.figure()
+            self.axs = [self.fig.add_subplot(ind) for ind in [121, 122]]
+            self.imgs = [ax.imshow(np.zeros((height, width), dtype=np.uint8)) for ax in self.axs]
+            self.fig.canvas.draw()
+            plt.pause(0.01)
+
     def step(self, action, realtime=False):
         # Execute one time step within the environment
 
@@ -251,7 +262,7 @@ class CutterEnv(CutterEnvBase):
 
         if self.use_flow:
             if self.last_grayscale is None:
-                layers.append(np.zeros((self.height, self.width), dtype=np.uint8))
+                flow_img = np.zeros((self.height, self.width), dtype=np.uint8)
             else:
                 import cv2
                 flow = cv2.calcOpticalFlowFarneback(prev=self.last_grayscale, next=grayscale, flow=None,
@@ -267,12 +278,19 @@ class CutterEnv(CutterEnvBase):
                 #     plt.imshow(mask, cmap='gray')
                 #     plt.show()
 
-                layers.append(flow_img)
+            layers.append(flow_img)
+            if self.gui:
+                self.imgs[1].set_data(np.dstack([flow_img] * 3))
 
         if self.use_last_frame:
             layers.append(self.last_grayscale if self.last_grayscale is not None else np.zeros((self.height, self.width), dtype=np.uint8))
 
         self.last_grayscale = grayscale
+
+        if self.gui:
+            self.imgs[0].set_data(rgb_img)
+            self.fig.canvas.draw()
+            plt.pause(0.01)
 
         return np.dstack(layers)
 
@@ -442,10 +460,11 @@ if __name__ == '__main__':
                 env = Monitor(env)
             return env
 
-        env = VecTransposeImage(SubprocVecEnv([make_env] * num_envs))
+        # env = VecTransposeImage(SubprocVecEnv([make_env] * num_envs))
+        env = (VecTransposeImage(DummyVecEnv([partial(make_env, monitor=True)])))
         eval_env = (VecTransposeImage(DummyVecEnv([partial(make_env, monitor=True)])))
 
-        eval_callback = EvalCallback(eval_env, best_model_save_path='./', log_path='./', eval_freq=1000, n_eval_episodes=10,
+        eval_callback = EvalCallback(eval_env, best_model_save_path='./', log_path='./', eval_freq=500, n_eval_episodes=10,
                                      deterministic=True, render=False)
 
         # model_file = '{}.model'.format(eval_env.model_name)
@@ -462,7 +481,8 @@ if __name__ == '__main__':
         env = CutterEnv(width, height, grayscale=grayscale, use_seg=use_seg, use_depth=use_depth, use_flow=use_flow, use_last_frame=use_last_frame,
                         use_gui=True, max_elapsed_time=1.0, max_vel=0.05, debug=True)
         model = PPO("CnnPolicy", env, verbose=1)
-        model_file = '{}.model'.format(env.model_name)
+        # model_file = '{}.model'.format(env.model_name)
+        model_file = 'best_model.zip'
         if os.path.exists(model_file):
             model = model.load(model_file)
         obs = env.reset()
@@ -470,7 +490,7 @@ if __name__ == '__main__':
         for i in range(1000):
             # action, _states = model.predict(obs, deterministic=True)
             # action = env.action_space.sample()
-            if (i + 1) % 5:
+            if (i + 1) % 8:
                 action = np.array([0.0, 0.0, -1.0])
             else:
                 print('Terminating')
