@@ -36,8 +36,20 @@ def pose_to_tf(pos, quat):
 
 
 class CutterEnvBase(gym.Env):
-    def __init__(self, width, height, grayscale=False, use_seg=False, use_depth=False, use_flow=False, use_last_frame=False):
+    def __init__(self, width, height, grayscale=False, use_seg=False, use_depth=False, use_flow=False, use_last_frame=False,
+                 use_gui=False):
         super(CutterEnvBase, self).__init__()
+
+        self.width = width
+        self.height = height
+        self.grayscale = grayscale
+        self.use_seg = use_seg
+        self.use_depth = use_depth
+        self.use_flow = use_flow
+        self.use_last_frame = use_last_frame
+        self.use_gui = use_gui
+
+        self.last_grayscale = None
 
         # Initialize gym parameters
         num_channels = (2 if use_seg else (1 if grayscale else 3)) + (1 if use_depth else 0) + (1 if use_flow else 0) + (1 if use_last_frame else 0)
@@ -48,17 +60,78 @@ class CutterEnvBase(gym.Env):
                                                            use_depth='_depth' if use_depth else '', flow='_flow' if use_flow else '',
                                                                           uselast='_uselastframe' if use_last_frame else '')
 
+        if self.use_gui:
+            plt.ion()
+            self.fig = plt.figure()
+            self.axs = [self.fig.add_subplot(ind) for ind in [121, 122]]
+            self.imgs = [ax.imshow(np.zeros((height, width), dtype=np.uint8)) for ax in self.axs]
+            self.fig.canvas.draw()
+            plt.pause(0.01)
+
     def step(self, action):
         raise NotImplementedError()
 
     def get_obs(self):
-        raise NotImplementedError()
+        # Grab the new image observation
+        rgb_img, depth_img, seg_img = self.get_images()
+        grayscale = rgb_img.mean(axis=2).astype(np.uint8)
+        layers = []
+
+        if self.grayscale:
+            layers.append(grayscale)
+        else:
+            layers.append(rgb_img)
+
+        if depth_img is not None:
+            layers.append(depth_img)
+
+        if seg_img is not None:
+            layers.append(seg_img)
+
+        if self.use_flow:
+            if self.last_grayscale is None:
+                flow_img = np.zeros((self.height, self.width), dtype=np.uint8)
+            else:
+                import cv2
+                flow = cv2.calcOpticalFlowFarneback(prev=self.last_grayscale, next=grayscale, flow=None,
+                                                    pyr_scale=0.5, levels=3, winsize=15, iterations=3,
+                                                    poly_n=5, poly_sigma=1.1, flags=0)
+                flow_mag = np.linalg.norm(flow, axis=2)
+                flow_img = (255 * flow_mag / flow_mag.max()).astype(np.uint8)
+
+                # if self.debug:
+                #     import matplotlib.pyplot as plt
+                #     # plt.imshow(grayscale, cmap='gray')
+                #     # plt.show()
+                #     plt.imshow(mask, cmap='gray')
+                #     plt.show()
+
+            layers.append(flow_img)
+            if self.use_gui:
+                self.imgs[1].set_data(np.dstack([flow_img] * 3))
+
+        if self.use_last_frame:
+            layers.append(self.last_grayscale if self.last_grayscale is not None else grayscale)
+
+        self.last_grayscale = grayscale
+
+        if self.use_gui:
+            self.imgs[0].set_data(rgb_img)
+            self.fig.canvas.draw()
+            plt.pause(0.01)
+
+        return np.dstack(layers)
 
     def reset(self):
         raise NotImplementedError()
 
     def render(self, mode='human'):
         raise NotImplementedError()
+
+    def get_images(self):
+        # Returns RGB, depth, and segmentation images
+        raise NotImplementedError()
+
 
 
 class CutterEnv(CutterEnvBase):
@@ -67,17 +140,11 @@ class CutterEnv(CutterEnvBase):
 
     def __init__(self, width, height, grayscale=False, use_seg=False, use_depth=False, use_flow=False, use_last_frame=False, max_vel=0.075, action_freq=24, max_elapsed_time=3.0,
                  min_reward_dist=0.10, use_gui=False, debug=False):
-        super(CutterEnv, self).__init__(width, height, grayscale=grayscale, use_seg=use_seg, use_depth=use_depth, use_flow=use_flow, use_last_frame=use_last_frame)
+        super(CutterEnv, self).__init__(width, height, grayscale=grayscale, use_seg=use_seg, use_depth=use_depth, use_flow=use_flow, use_last_frame=use_last_frame,
+                                        use_gui=use_gui)
 
         # Configuration parameters
         self.debug = debug
-        self.width = width
-        self.height = height
-        self.grayscale = grayscale
-        self.use_seg = use_seg
-        self.use_depth = use_depth
-        self.use_flow = use_flow
-        self.use_last_frame = use_last_frame
         self.action_freq = action_freq
         self.max_elapsed_time = max_elapsed_time
         self.min_reward_dist = min_reward_dist
@@ -97,7 +164,6 @@ class CutterEnv(CutterEnvBase):
         self.in_mouth = False               # Is the branch currently inside of the cutter mouth?
         self.failure = False                # Is the branch currently in the failure region?
         self.mesh_points = {}
-        self.last_grayscale = None
         self.last_command = np.zeros(2)
         self.lighting = None                # Location of light source
         self.contrast = None                # Contrast adjustment factor
@@ -112,8 +178,7 @@ class CutterEnv(CutterEnvBase):
 
         # Setup Pybullet simulation
 
-        self.gui = use_gui
-        self.client_id = pb.connect(pb.GUI if use_gui else pb.DIRECT)
+        self.client_id = pb.connect(pb.GUI if self.use_gui else pb.DIRECT)
         pb.setAdditionalSearchPath(pybullet_data.getDataPath(), physicsClientId=self.client_id)
         pb.setGravity(0, 0, -9.8, physicsClientId=self.client_id)
         self.plane_id = pb.loadURDF("plane.urdf", physicsClientId=self.client_id)
@@ -175,14 +240,6 @@ class CutterEnv(CutterEnvBase):
 
         self.start_state = pb.saveState(physicsClientId=self.client_id)
 
-        # Image debugging utils via matplotlib
-        if self.gui:
-            plt.ion()
-            self.fig = plt.figure()
-            self.axs = [self.fig.add_subplot(ind) for ind in [121, 122]]
-            self.imgs = [ax.imshow(np.zeros((height, width), dtype=np.uint8)) for ax in self.axs]
-            self.fig.canvas.draw()
-            plt.pause(0.01)
 
     def step(self, action, realtime=False):
         # Execute one time step within the environment
@@ -232,12 +289,10 @@ class CutterEnv(CutterEnvBase):
         self.last_command = vel_command
         return self.get_obs(), reward, done, {}
 
-
-    def get_obs(self):
-        # Grab the new image observation
-        view_matrix = self.robot.get_link_kinematics('wrist_3_link-tool0_fixed_joint', as_matrix=True) @ self.current_camera_tf
-
-        _, _, rgb_img, raw_depth_img, seg_img = pb.getCameraImage(
+    def get_images(self):
+        view_matrix = self.robot.get_link_kinematics('wrist_3_link-tool0_fixed_joint',
+                                                     as_matrix=True) @ self.current_camera_tf
+        _, _, rgb_img, raw_depth_img, raw_seg_img = pb.getCameraImage(
             width=self.width,
             height=self.height,
             viewMatrix=np.linalg.inv(view_matrix).T.reshape(-1),
@@ -248,65 +303,26 @@ class CutterEnv(CutterEnvBase):
             physicsClientId=self.client_id
         )
 
-        rgb_img = rgb_img[:,:,:3]
+        rgb_img = rgb_img[:, :, :3]
         pil_img = Image.fromarray(rgb_img, 'RGB')
         enhancer = ImageEnhance.Contrast(pil_img)
         rgb_img = np.asarray(enhancer.enhance(self.contrast))
 
-        grayscale = rgb_img.mean(axis=2).astype(np.uint8)
-        layers = []
-        if self.use_seg:
-            raise NotImplementedError("Segmentation logic needs to be reimplemented")
-            tree_layer_raw = (seg_img == self.tree.robot_id).astype(np.float64)
-            # tree_layer = overlay_noise(tree_layer_raw, *self.current_tree_noise, convert_to_uint8=True)
-            tree_layer = (tree_layer_raw * 255).astype(np.uint8)
-            robot_layer = ((seg_img == self.robot.robot_id) * 255).astype(np.uint8)
-            layers.extend([tree_layer, robot_layer])
-        else:
-            if self.grayscale:
-                layers.append(grayscale)
-            else:
-                layers.append(rgb_img)
-
+        depth_img = None
         if self.use_depth:
             depth_img = raw_depth_img
             # depth_img = overlay_noise(raw_depth_img, *self.current_depth_noise, convert_to_uint8=True)
-            layers.append(depth_img)
 
-        if self.use_flow:
-            if self.last_grayscale is None:
-                flow_img = np.zeros((self.height, self.width), dtype=np.uint8)
-            else:
-                import cv2
-                flow = cv2.calcOpticalFlowFarneback(prev=self.last_grayscale, next=grayscale, flow=None,
-                                                    pyr_scale=0.5, levels=3, winsize=15, iterations=3,
-                                                    poly_n=5, poly_sigma=1.1, flags=0)
-                flow_mag = np.linalg.norm(flow, axis=2)
-                flow_img = (255 * flow_mag / flow_mag.max()).astype(np.uint8)
+        seg_img = None
+        if self.use_seg:
+            raise NotImplementedError("Segmentation logic needs to be reimplemented")
+            tree_layer_raw = (raw_seg_img == self.tree.robot_id).astype(np.float64)
+            # tree_layer = overlay_noise(tree_layer_raw, *self.current_tree_noise, convert_to_uint8=True)
+            tree_layer = (tree_layer_raw * 255).astype(np.uint8)
+            robot_layer = ((raw_seg_img == self.robot.robot_id) * 255).astype(np.uint8)
+            seg_img = np.dstack([tree_layer, robot_layer])
 
-                # if self.debug:
-                #     import matplotlib.pyplot as plt
-                #     # plt.imshow(grayscale, cmap='gray')
-                #     # plt.show()
-                #     plt.imshow(mask, cmap='gray')
-                #     plt.show()
-
-            layers.append(flow_img)
-            if self.gui:
-                self.imgs[1].set_data(np.dstack([flow_img] * 3))
-
-        if self.use_last_frame:
-            layers.append(self.last_grayscale if self.last_grayscale is not None else np.zeros((self.height, self.width), dtype=np.uint8))
-
-        self.last_grayscale = grayscale
-
-        if self.gui:
-            self.imgs[0].set_data(rgb_img)
-            self.fig.canvas.draw()
-            plt.pause(0.01)
-
-        return np.dstack(layers)
-
+        return rgb_img, depth_img, seg_img
 
     @property
     def current_tree_base_tf(self):
