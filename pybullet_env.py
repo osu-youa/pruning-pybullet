@@ -94,6 +94,8 @@ class CutterEnv(CutterEnvBase):
         self.target_id = None               # Which of the side branches are we aiming at on the target tree?
         self.target_tf = np.identity(4)     # What is the next waypoint for the cutter?
         self.elapsed_time = 0.0
+        self.in_mouth = False               # Is the branch currently inside of the cutter mouth?
+        self.failure = False                # Is the branch currently in the failure region?
         self.mesh_points = {}
         self.last_grayscale = None
         self.last_command = np.zeros(2)
@@ -128,6 +130,8 @@ class CutterEnv(CutterEnvBase):
             farVal=3.0)
         self.robot.attach_ghost_body_from_file('robots/ur5e/collision/cutter-mouth-collision.stl',
                                                'mouth', 'cutpoint', rpy=[0, 0, 3.1416])
+        self.robot.attach_ghost_body_from_file('robots/ur5e/collision/cutter-failure-zone.stl',
+                                               'failure', 'cutpoint', rpy=[0, 0, 3.1416])
 
         self.tool_to_camera_offset = np.array([0.0, 0.075, 0.0, 1.0])
         tool_tf = self.robot.get_link_kinematics('wrist_3_link-tool0_fixed_joint', as_matrix=True)
@@ -212,6 +216,15 @@ class CutterEnv(CutterEnvBase):
 
             if realtime:
                 time.sleep(1.0/240)
+
+        # Compute collisions with ghost bodies
+        base_pos, base_quat = pb.getBasePositionAndOrientation(self.target_tree, physicsClientId=self.client_id)
+        base_tf = pose_to_tf(base_pos, base_quat)
+        tree_pts = self.tree_model_metadata[self.target_tree][self.target_id]['points']
+        self.in_mouth = self.robot.query_ghost_body_collision('mouth', tree_pts,
+                                                         point_frame_tf=base_tf, plot_debug=False)
+        self.failure = not self.in_mouth and self.robot.query_ghost_body_collision('failure', tree_pts,
+                                                                         point_frame_tf=base_tf, plot_debug=False)
 
         done = self.is_done()
         reward = self.get_reward(vel_command, done)
@@ -313,27 +326,32 @@ class CutterEnv(CutterEnvBase):
 
     def get_reward(self, command, done=False):
 
-        base_pos, base_quat = pb.getBasePositionAndOrientation(self.target_tree, physicsClientId=self.client_id)
-        base_tf = pose_to_tf(base_pos, base_quat)
-        in_mouth = self.robot.query_ghost_body_collision('mouth', self.tree_model_metadata[self.target_tree][self.target_id]['points'],
-                                                         point_frame_tf=base_tf, plot_debug=False)
+        in_mouth = self.in_mouth
+        failure = not in_mouth and self.failure
 
-        if self.debug and in_mouth:
-            print('[DEBUG] Branch is in mouth!')
+        if self.debug:
+            if in_mouth:
+                print('[DEBUG] Branch is in mouth!')
+            if failure:
+                print('[DEBUG] Branch has reached failure point!')
 
-        d = self.get_cutter_dist()
-        dist_proportion = max(1 - d / self.min_reward_dist, 0.0)
-        if done:
-            if not in_mouth:
-                reward = 0.0
-            else:
-                reward = (self.max_elapsed_time - self.elapsed_time) * dist_proportion
+        if failure:
+            reward = -(self.max_elapsed_time - self.elapsed_time)
         else:
-            accel = np.linalg.norm(command - self.last_command)
-            accel_multiplier = 1.0 - max(0, accel - self.accel_threshold) * self.accel_penalty
+            d = self.get_cutter_dist()
+            dist_proportion = max(1 - d / self.min_reward_dist, 0.0)
 
-            ts = self.action_freq / 240.0
-            reward = dist_proportion * ts * (1.0 if in_mouth else 0.25) * accel_multiplier
+            if done:
+                if not in_mouth:
+                    reward = 0.0
+                else:
+                    reward = (self.max_elapsed_time - self.elapsed_time) * dist_proportion
+            else:
+                accel = np.linalg.norm(command - self.last_command)
+                accel_multiplier = 1.0 - max(0, accel - self.accel_threshold) * self.accel_penalty
+
+                ts = self.action_freq / 240.0
+                reward = dist_proportion * ts * (1.0 if in_mouth else 0.25) * accel_multiplier
 
         if self.debug:
             print('Obtained reward: {:.3f}'.format(reward))
@@ -342,7 +360,7 @@ class CutterEnv(CutterEnvBase):
 
 
     def is_done(self):
-        return self.elapsed_time >= self.max_elapsed_time
+        return self.failure or (self.elapsed_time >= self.max_elapsed_time)
 
     def reset(self):
 
@@ -350,6 +368,8 @@ class CutterEnv(CutterEnvBase):
             print('Reset! (Elapsed time {:.2f}s)'.format(self.elapsed_time))
 
         self.elapsed_time = 0.0
+        self.failure = False
+        self.in_mouth = False
         pb.restoreState(stateId=self.start_state, physicsClientId=self.client_id)
 
         self.last_command = np.zeros(2)
@@ -450,6 +470,10 @@ if __name__ == '__main__':
     use_last_frame = True
     num_envs = 3
 
+    model_name = 'model_{w}_{h}{g}{s}{d}{f}{l}.zip'.format(w=width, h=height, g='_grayscale' if grayscale else '',
+                                                       s='_seg' if use_seg else '', d='_depth' if use_depth else '',
+                                                       f='_flow' if use_flow else '', l='_uselast' if use_last_frame else '')
+
     if action == 'train':
 
 
@@ -460,15 +484,17 @@ if __name__ == '__main__':
                 env = Monitor(env)
             return env
 
-        # env = VecTransposeImage(SubprocVecEnv([make_env] * num_envs))
-        env = (VecTransposeImage(DummyVecEnv([partial(make_env, monitor=True)])))
+        env = VecTransposeImage(SubprocVecEnv([make_env] * num_envs))
+        # env = (VecTransposeImage(DummyVecEnv([partial(make_env, monitor=True)])))
         eval_env = (VecTransposeImage(DummyVecEnv([partial(make_env, monitor=True)])))
 
-        eval_callback = EvalCallback(eval_env, best_model_save_path='./', log_path='./', eval_freq=500, n_eval_episodes=10,
+        n_steps = 600 // num_envs
+        batch_size = 60
+        eval_callback = EvalCallback(eval_env, best_model_save_path='./', log_path='./', eval_freq=n_steps, n_eval_episodes=10,
                                      deterministic=True, render=False)
 
         # model_file = '{}.model'.format(eval_env.model_name)
-        model = PPO("CnnPolicy", env, verbose=1, device='auto')
+        model = PPO("CnnPolicy", env, batch_size=batch_size, n_steps=n_steps, verbose=1, device='auto')
 
         print('Learning...')
 
@@ -488,13 +514,13 @@ if __name__ == '__main__':
         obs = env.reset()
         all_dists = []
         for i in range(1000):
-            # action, _states = model.predict(obs, deterministic=True)
+            action, _states = model.predict(obs, deterministic=True)
             # action = env.action_space.sample()
-            if (i + 1) % 8:
-                action = np.array([0.0, 0.0, -1.0])
-            else:
-                print('Terminating')
-                action = np.array([0.0, 0.0, 1.0])
+            # if (i + 1) % 8:
+            #     action = np.array([0.0, 0.0, -1.0])
+            # else:
+            #     print('Terminating')
+            #     action = np.array([0.0, 0.0, 1.0])
 
             obs, reward, done, info = env.step(action, realtime=True)
             # env.render()
