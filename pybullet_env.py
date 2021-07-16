@@ -211,7 +211,7 @@ class CutterEnv(CutterEnvBase):
         target_ys = np.linspace(0.75, 0.95, num=17, endpoint=True)
         target_zs = np.linspace(0.8, 1.3, num=25, endpoint=True)
         all_poses = [[x, y, z] + list(self.start_orientation) for x, y, z in product(target_xs, target_ys, target_zs)]
-        self.poses = self.robot.determine_reachable_target_poses('cutpoint', all_poses, home_joints)
+        self.poses = self.robot.determine_reachable_target_poses('cutpoint', all_poses, home_joints, max_iters=100)
 
         # wall_id = pb.loadURDF("models/wall.urdf", physicsClientId=self.client_id, basePosition=[0, tree_y + 2.0, 0])
         # pb.changeVisualShape(objectUniqueId=wall_id, linkIndex=-1, textureUniqueId=pb.loadTexture('/textures/trees.png'),
@@ -359,7 +359,7 @@ class CutterEnv(CutterEnvBase):
 
             if done:
                 if not in_mouth:
-                    reward = 0.0
+                    reward = -(self.max_elapsed_time - self.elapsed_time)
                 else:
                     reward = (self.max_elapsed_time - self.elapsed_time) * dist_proportion
             else:
@@ -416,8 +416,8 @@ class CutterEnv(CutterEnvBase):
                            np.random.uniform(-0.05, 0.05),
                            np.random.uniform(-0.02, 0.02) - 0.15]) * np.array([0.0, 0.0, 1.0])
         cutter_start_pos = homog_tf(tf, offset)
-        ik = self.robot.solve_end_effector_ik('cutpoint', cutter_start_pos, self.start_orientation)
-        self.robot.reset_joint_states(ik)
+        ik = self.robot.move_end_effector_ik('cutpoint', cutter_start_pos, self.start_orientation, threshold=0.005,
+                                             retries=3)
 
         self.target_tf = self.robot.get_link_kinematics('cutpoint', as_matrix=True)
 
@@ -477,8 +477,8 @@ if __name__ == '__main__':
 
     # action = 'eval'
     action = 'train'
-    width = 318
-    height = 180
+    width = 424
+    height = 240
     grayscale = False
     use_seg = False
     use_depth = False
