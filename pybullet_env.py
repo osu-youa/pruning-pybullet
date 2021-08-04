@@ -141,6 +141,8 @@ class CutterEnvBase(gym.Env):
         # Returns RGB, depth, and segmentation images
         raise NotImplementedError()
 
+    def set_title(self, title):
+        self.axs[0].set_title(title)
 
 
 class CutterEnv(CutterEnvBase):
@@ -204,7 +206,7 @@ class CutterEnv(CutterEnvBase):
         self.robot.reset_joint_states(home_joints)
         self.start_orientation = self.robot.get_link_kinematics('cutpoint')[1]
         self.proj_mat = pb.computeProjectionMatrixFOV(
-            fov=60.0, aspect = width / height, nearVal=0.01,
+            fov=42.0, aspect = width / height, nearVal=0.01,
             farVal=3.0)
         self.robot.attach_ghost_body_from_file('robots/ur5e/collision/cutter-mouth-collision.stl',
                                                'mouth', 'cutpoint', rpy=[0, 0, 3.1416])
@@ -214,10 +216,18 @@ class CutterEnv(CutterEnvBase):
         self.tool_to_camera_offset = np.array([0.0, 0.075, 0.0, 1.0])
         tool_tf = self.robot.get_link_kinematics('wrist_3_link-tool0_fixed_joint', as_matrix=True)
         self.ideal_camera_pos = (tool_tf @ self.tool_to_camera_offset)[:3]
-        ideal_view_matrix = np.reshape(pb.computeViewMatrix(cameraEyePosition = self.ideal_camera_pos,
-                                                            cameraTargetPosition=self.robot.get_link_kinematics('cutpoint')[0],
-                                                            cameraUpVector=[0,0,1]), (4,4)).T
+
+        import camera_util
+
+        PAN = np.radians(-45)
+        TILT = np.radians(45)
+
+        ideal_view_matrix = camera_util.get_view_matrix(PAN, TILT, base_tf=tool_tf)
+        # ideal_view_matrix = np.reshape(pb.computeViewMatrix(cameraEyePosition = self.ideal_camera_pos,
+        #                                                     cameraTargetPosition=self.robot.get_link_kinematics('cutpoint')[0],
+        #                                                     cameraUpVector=[0,0,1]), (4,4)).T
         self.ideal_tool_camera_tf = np.linalg.inv(tool_tf) @ np.linalg.inv(ideal_view_matrix)
+        # self.ideal_tool_camera_tf = ideal_view_matrix
 
         # Create pose database
         target_xs = np.linspace(-0.3, 0.3, num=25, endpoint=True)
@@ -500,11 +510,19 @@ class CutterEnv(CutterEnvBase):
         # TODO: Randomize exposure, loaded robot model, etc.
 
 
+def check_input_variance(model, obs, samples=10, output=False):
+    rez = np.array([model.predict(obs, deterministic=False)[0] for _ in range(samples)])
+    std = rez.std(axis=0)
+    if output:
+        print('Stdevs: ' + ', '.join(['{:.4f}'.format(x) for x in std]))
+
+    return std
+
 
 if __name__ == '__main__':
 
-    # action = 'eval'
-    action = 'train'
+    action = 'eval'
+    # action = 'train'
     use_trained = True
     width = 424
     height = 240
@@ -515,6 +533,7 @@ if __name__ == '__main__':
     use_last_frame = True
     num_envs = 3
     record = False
+    variance_debug = False
 
     model_name = 'model_{w}_{h}{g}{s}{d}{f}{l}.zip'.format(w=width, h=height, g='_grayscale' if grayscale else '',
                                                        s='_seg' if use_seg else '', d='_depth' if use_depth else '',
@@ -565,6 +584,9 @@ if __name__ == '__main__':
         for i in range(timesteps):
             if use_trained:
                 action, _states = model.predict(obs, deterministic=True)
+                if variance_debug:
+                    check_input_variance(model, obs, output=True)
+
             else:
                 # action = env.action_space.sample()
                 action = np.array([1.0, 0.0])

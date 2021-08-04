@@ -2,10 +2,11 @@ import pyrealsense2 as rs
 import numpy as np
 import matplotlib.pyplot as plt
 import os
-from pybullet_env import CutterEnvBase
+from pybullet_env import CutterEnvBase, check_input_variance
 from stable_baselines3 import PPO
 import cv2
 import time
+
 
 class RealCutterEnv(CutterEnvBase):
     def __init__(self, width, height, grayscale=False, use_seg=False, use_depth=False, use_flow=False, use_last_frame=False,
@@ -58,8 +59,12 @@ class RealCutterEnv(CutterEnvBase):
 
 if __name__ == '__main__':
 
-    width = 318
-    height = 180
+    # action = 'server'
+    action = 'eval'
+    forward_speed = 0.05
+
+    width = 424
+    height = 240
     grayscale = False
     use_seg = False
     use_depth = False
@@ -76,14 +81,61 @@ if __name__ == '__main__':
         if os.path.exists(model_file):
             model = model.load(model_file)
 
-        num_frames = 500
-        start = time.time()
 
-        for i in range(num_frames):
-            obs = env.get_obs()
-            print(model.predict(obs))
-        end = time.time()
-        print('Ran at {:.2f} fps'.format(num_frames / (end - start)))
+        if action == 'eval':
+            num_frames = 500
+            start = time.time()
+
+            action_hist = []
+
+            for i in range(num_frames):
+                obs = env.get_obs()
+                action = model.predict(obs)[0]
+                action_hist.append(action)
+                print(action)
+                env.set_title('Frame {}'.format(i))
+
+                check_input_variance(model, obs, output=True)
+
+            end = time.time()
+            print('Ran at {:.2f} fps'.format(num_frames / (end - start)))
+
+            plt.ioff()
+            plt.figure()
+            import pdb
+            pdb.set_trace()
+            plt.plot(np.arange(len(action_hist)), np.array(action_hist))
+            plt.show()
+        elif action == 'server':
+
+            import socket
+
+            ADDRESS = '192.168.2.227'
+            PORT = 10000
+
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            address = (ADDRESS, PORT)
+            print('Starting up server on {}:{}'.format(*address))
+            sock.bind(address)
+            sock.listen(1)
+
+            while True:
+                print('Waiting for connection')
+                connection, client_address = sock.accept()
+                print('Connection accepted!')
+
+                try:
+                    while True:
+                        obs = env.get_obs()
+                        action = model.predict(obs, deterministic=True)[0]
+                        array = np.array([action[0], action[1], 0]) * forward_speed
+                        connection.sendall(array.tostring())
+                        time.sleep(0.1)
+                finally:
+                    connection.close()
+                    print('Connection terminated, waiting for new connection...')
+        else:
+            raise NotImplementedError
 
     finally:
         env.shutdown()
