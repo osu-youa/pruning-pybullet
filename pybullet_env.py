@@ -17,6 +17,7 @@ from stable_baselines3.common.vec_env import VecTransposeImage, SubprocVecEnv, D
 from stable_baselines3.common.monitor import Monitor
 from functools import partial
 
+import camera_util
 import matplotlib.pyplot as plt
 
 import gym
@@ -201,9 +202,9 @@ class CutterEnv(CutterEnvBase):
         self.plane_textures = [pb.loadTexture(os.path.join(plane_texture_root, file), physicsClientId=self.client_id) for file in os.listdir(plane_texture_root)]
 
         arm_location = os.path.join('robots', 'ur5e_cutter_new_calibrated_precise.urdf')
-        home_joints = [-1.5708, -2.2689, -1.3963, 0.52360, 1.5708, 3.14159]
+        self.home_joints = [-1.5708, -2.2689, -1.3963, 0.52360, 1.5708, 3.14159]
         self.robot = URDFRobot(arm_location, [0, 0, 0.02], [0, 0, 0, 1], physicsClientId=self.client_id)
-        self.robot.reset_joint_states(home_joints)
+        self.robot.reset_joint_states(self.home_joints)
         self.start_orientation = self.robot.get_link_kinematics('cutpoint')[1]
         self.proj_mat = pb.computeProjectionMatrixFOV(
             fov=42.0, aspect = width / height, nearVal=0.01,
@@ -213,28 +214,8 @@ class CutterEnv(CutterEnvBase):
         self.robot.attach_ghost_body_from_file('robots/ur5e/collision/cutter-failure-zone.stl',
                                                'failure', 'cutpoint', rpy=[0, 0, 3.1416])
 
-        self.tool_to_camera_offset = np.array([0.0, 0.075, 0.0, 1.0])
-        tool_tf = self.robot.get_link_kinematics('wrist_3_link-tool0_fixed_joint', as_matrix=True)
-        self.ideal_camera_pos = (tool_tf @ self.tool_to_camera_offset)[:3]
-
-        import camera_util
-
-        PAN = np.radians(-45)
-        TILT = np.radians(45)
-
-        ideal_view_matrix = camera_util.get_view_matrix(PAN, TILT, base_tf=tool_tf)
-        # ideal_view_matrix = np.reshape(pb.computeViewMatrix(cameraEyePosition = self.ideal_camera_pos,
-        #                                                     cameraTargetPosition=self.robot.get_link_kinematics('cutpoint')[0],
-        #                                                     cameraUpVector=[0,0,1]), (4,4)).T
-        self.ideal_tool_camera_tf = np.linalg.inv(tool_tf) @ np.linalg.inv(ideal_view_matrix)
-        # self.ideal_tool_camera_tf = ideal_view_matrix
-
         # Create pose database
-        target_xs = np.linspace(-0.3, 0.3, num=25, endpoint=True)
-        target_ys = np.linspace(0.75, 0.95, num=17, endpoint=True)
-        target_zs = np.linspace(0.8, 1.3, num=25, endpoint=True)
-        all_poses = [[x, y, z] + list(self.start_orientation) for x, y, z in product(target_xs, target_ys, target_zs)]
-        self.poses = self.robot.determine_reachable_target_poses('cutpoint', all_poses, home_joints, max_iters=100)
+        self.poses = self.load_pose_database()
 
         # wall_id = pb.loadURDF("models/wall.urdf", physicsClientId=self.client_id, basePosition=[0, tree_y + 2.0, 0])
         # pb.changeVisualShape(objectUniqueId=wall_id, linkIndex=-1, textureUniqueId=pb.loadTexture('/textures/trees.png'),
@@ -433,14 +414,20 @@ class CutterEnv(CutterEnvBase):
         # self.current_depth_noise = (np.random.uniform(0, self.max_depth_sigma), self.noise_buffer.get_random(), np.random.uniform(0, self.max_noise_alpha))
         # self.current_tree_noise = (np.random.uniform(0, self.max_tree_sigma), self.noise_buffer.get_random(), np.random.uniform(0, self.max_noise_alpha))
 
-        # Compute a random for the camera transform
+        # Initialize an ideal camera transform, but with noise added to the parameters
+        tool_tf = self.robot.get_link_kinematics('wrist_3_link-tool0_fixed_joint', as_matrix=True)
+        pan = np.radians(np.random.uniform(-45-5, -45+5))
+        tilt = np.radians(np.random.uniform(45-7.5, 45+7.5))
+        ideal_view_matrix = camera_util.get_view_matrix(pan, tilt, base_tf=tool_tf)
+        ideal_tool_camera_tf = np.linalg.inv(tool_tf) @ np.linalg.inv(ideal_view_matrix)
 
+        # Perturb the tool-camera TF
         xyz_noise = np.random.uniform(-0.0025, 0.0025, size=3)
         rpy_noise = np.random.uniform(-np.radians(2.5), np.radians(2.5), size=3)
         noise_tf = np.identity(4)
         noise_tf[:3,3] = xyz_noise
         noise_tf[:3,:3] = Rotation.from_euler('xyz', rpy_noise, degrees=False).as_matrix()
-        self.current_camera_tf = self.ideal_tool_camera_tf @ noise_tf
+        self.current_camera_tf = ideal_tool_camera_tf @ noise_tf
 
         # From the selected target on the tree (computed in reset_trees()), figure out the offset for the cutters
         # Convert to world pose and then solve for the IKs
@@ -509,6 +496,21 @@ class CutterEnv(CutterEnvBase):
 
         # TODO: Randomize exposure, loaded robot model, etc.
 
+    def load_pose_database(self):
+        db_file = 'pose_database.pickle'
+        try:
+            with open(db_file, 'rb') as fh:
+                return pickle.load(fh)
+        except FileNotFoundError:
+            target_xs = np.linspace(-0.3, 0.3, num=25, endpoint=True)
+            target_ys = np.linspace(0.75, 0.95, num=17, endpoint=True)
+            target_zs = np.linspace(0.8, 1.3, num=25, endpoint=True)
+            all_poses = [[x, y, z] + list(self.start_orientation) for x, y, z in
+                         product(target_xs, target_ys, target_zs)]
+            poses = self.robot.determine_reachable_target_poses('cutpoint', all_poses, self.home_joints, max_iters=100)
+            with open(db_file, 'wb') as fh:
+                pickle.dump(poses, fh)
+            return poses
 
 def check_input_variance(model, obs, samples=10, output=False):
     rez = np.array([model.predict(obs, deterministic=False)[0] for _ in range(samples)])
