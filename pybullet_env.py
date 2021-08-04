@@ -208,7 +208,7 @@ class CutterEnv(CutterEnvBase):
         self.start_orientation = self.robot.get_link_kinematics('cutpoint')[1]
         self.proj_mat = pb.computeProjectionMatrixFOV(
             fov=42.0, aspect = width / height, nearVal=0.01,
-            farVal=3.0)
+            farVal=10.0)
         self.robot.attach_ghost_body_from_file('robots/ur5e/collision/cutter-mouth-collision.stl',
                                                'mouth', 'cutpoint', rpy=[0, 0, 3.1416])
         self.robot.attach_ghost_body_from_file('robots/ur5e/collision/cutter-failure-zone.stl',
@@ -217,9 +217,19 @@ class CutterEnv(CutterEnvBase):
         # Create pose database
         self.poses = self.load_pose_database()
 
-        # wall_id = pb.loadURDF("models/wall.urdf", physicsClientId=self.client_id, basePosition=[0, tree_y + 2.0, 0])
-        # pb.changeVisualShape(objectUniqueId=wall_id, linkIndex=-1, textureUniqueId=pb.loadTexture('/textures/trees.png'),
-        #                      physicsClientId=self.client_id)
+        # Load wall and wall textures
+        wall_folder = os.path.join('models', 'wall_textures')
+        self.wall_textures = [pb.loadTexture(os.path.join(wall_folder, file)) for file in os.listdir(wall_folder) if file.endswith('.png')]
+        wall_viz = pb.createVisualShape(shapeType=pb.GEOM_BOX, halfExtents=[10, 0.01, 7.5], physicsClientId=self.client_id)
+        wall_col = pb.createCollisionShape(shapeType=pb.GEOM_BOX, halfExtents=[10, 0.01, 7.5], physicsClientId=self.client_id)
+        self.wall_id = pb.createMultiBody(baseMass=0, baseVisualShapeIndex=wall_viz, baseCollisionShapeIndex=wall_col, basePosition=[0, 15, 7.5],
+                                          baseOrientation=[0,0,0,1], physicsClientId=self.client_id)
+
+        side_wall_viz = pb.createVisualShape(shapeType=pb.GEOM_BOX, halfExtents=[0.01, 10.0, 7.5], physicsClientId=self.client_id)
+        side_wall_col = pb.createCollisionShape(shapeType=pb.GEOM_BOX, halfExtents=[0.01, 10.0, 7.5],
+                                           physicsClientId=self.client_id)
+        self.side_wall_id = pb.createMultiBody(baseMass=0, baseVisualShapeIndex=side_wall_viz, baseCollisionShapeIndex=side_wall_col, basePosition=[5, 0, 7.5],
+                                          baseOrientation=[0,0,0,1], physicsClientId=self.client_id)
 
         # Load trees - Put them in background out of sight of the camera
 
@@ -405,7 +415,7 @@ class CutterEnv(CutterEnvBase):
         self.last_command = np.zeros(2)
 
         # Modify the scenery
-        self.reset_trees()
+        self.reset_trees(wall_in_front=np.random.randint(2))
         self.randomize()
 
         # Reset the image noise parameters
@@ -451,7 +461,15 @@ class CutterEnv(CutterEnvBase):
     def render(self, mode='human', close=False):
         print('Last dist: {:.3f}'.format(self.get_cutter_dist()))
 
-    def reset_trees(self):
+    def reset_trees(self, wall_in_front=False):
+
+        # Determine the spacing for the wall
+        wall_range = (1, 2) if wall_in_front else (8, 10)
+        tree_range = (8, 10) if wall_in_front else (3, 5)
+        side_wall_range = (2, 6)
+        wall_offset = np.random.uniform(*wall_range)
+        tree_offset = np.random.uniform(*tree_range)
+        side_wall_offset = np.random.uniform(*side_wall_range)
 
         # Select one of the trees from the tree model metadata
         all_trees = list(self.tree_model_metadata)
@@ -474,27 +492,35 @@ class CutterEnv(CutterEnvBase):
 
         pb.resetBasePositionAndOrientation(bodyUniqueId=self.target_tree, posObj=base_loc, ornObj=[0.7071, 0, 0, 0.7071], physicsClientId=self.client_id)
 
-        ROW_SPACING = 2.0
+        # Move the wall and background trees into place
+        pb.resetBasePositionAndOrientation(bodyUniqueId=self.wall_id, posObj=[0, base_loc[1] + wall_offset, 7.5],
+                                           ornObj=[0, 0, 0, 1], physicsClientId=self.client_id)
+
+        pb.resetBasePositionAndOrientation(bodyUniqueId=self.side_wall_id, posObj=[side_wall_offset, 0, 7.5], ornObj=[0,0,0,1],
+                                           physicsClientId=self.client_id)
+
+
         offsets = np.arange(len(all_trees))
         offsets = (offsets - offsets.mean()) * 2
-        bg_offset = base_loc[1] + ROW_SPACING
+        bg_offset = base_loc[1] + tree_offset
         for bg_tree, offset in zip(all_trees, offsets):
             base_offset = np.array([np.random.uniform(-0.10, 0.10) + offset, np.random.uniform(-0.10, 0.10) + bg_offset, 0])
             pb.resetBasePositionAndOrientation(bodyUniqueId=bg_tree, posObj=base_offset, ornObj=[0.7071, 0, 0, 0.7071], physicsClientId=self.client_id)
 
     def randomize(self):
-        # Resets ground texture
+        # Resets ground and wall texture
         pb.changeVisualShape(objectUniqueId=self.plane_id, linkIndex=-1, textureUniqueId=self.plane_textures[np.random.choice(len(self.plane_textures))],
                              physicsClientId=self.client_id)
-
-
+        pb.changeVisualShape(objectUniqueId=self.wall_id, linkIndex=-1, textureUniqueId=self.wall_textures[np.random.choice(len(self.wall_textures))],
+                             physicsClientId=self.client_id)
+        pb.changeVisualShape(objectUniqueId=self.side_wall_id, linkIndex=-1,
+                             textureUniqueId=self.wall_textures[np.random.choice(len(self.wall_textures))],
+                             physicsClientId=self.client_id)
 
         self.lighting = np.random.uniform(-1.0, 1.0, 3)
         self.lighting[2] = np.abs(self.lighting[2])
         self.lighting *= np.random.uniform(8.0, 16.0) / np.linalg.norm(self.lighting)
         self.contrast = np.random.uniform(0.5, 2.0)
-
-        # TODO: Randomize exposure, loaded robot model, etc.
 
     def load_pose_database(self):
         db_file = 'pose_database.pickle'
