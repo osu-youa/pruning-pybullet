@@ -176,6 +176,7 @@ class CutterEnv(CutterEnvBase):
         self.target_tf = np.identity(4)     # What is the next waypoint for the cutter?
         self.approach_vec = None            # Unit vector pointing towards the target from the cutter start position
         self.approach_history = []          # Keeps track of best approach distances
+        self.speed = max_vel
         self.elapsed_time = 0.0
         self.in_mouth = False               # Is the branch currently inside of the cutter mouth?
         self.failure = False                # Is the branch currently in the failure region?
@@ -263,7 +264,7 @@ class CutterEnv(CutterEnvBase):
         horizontal, vertical = action
         vel_command = np.array([horizontal, vertical])
 
-        step = self.action_freq * self.max_vel / 240
+        step = self.action_freq * self.speed / 240
         delta = np.array([horizontal * step, vertical * step, step, 1.0], dtype=np.float32)
         prev_target_pos = self.target_tf[:3,3]
         new_target_pos = (self.target_tf @ delta)[:3]
@@ -410,6 +411,7 @@ class CutterEnv(CutterEnvBase):
         self.elapsed_time = 0.0
         self.failure = False
         self.in_mouth = False
+        self.speed = np.random.uniform(self.max_vel * 0.5, self.max_vel)
         pb.restoreState(stateId=self.start_state, physicsClientId=self.client_id)
 
         self.last_command = np.zeros(2)
@@ -442,9 +444,9 @@ class CutterEnv(CutterEnvBase):
         # From the selected target on the tree (computed in reset_trees()), figure out the offset for the cutters
         # Convert to world pose and then solve for the IKs
         tf = pose_to_tf(self.target_pose[:3], self.target_pose[3:])
-        offset = np.array([np.random.uniform(-0.05, 0.05),
-                           np.random.uniform(-0.05, 0.05),
-                           np.random.uniform(-0.02, 0.02) - 0.15]) * np.array([0.0, 0.0, 1.0])
+        offset = np.array([np.random.uniform(-0.10, 0.10),
+                           np.random.uniform(-0.10, 0.10),
+                           np.random.uniform(-0.03, 0.03) - 0.15])
         cutter_start_pos = homog_tf(tf, offset)
 
         approach_vec = cutter_start_pos - self.target_pose[:3]
