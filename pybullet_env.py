@@ -204,7 +204,8 @@ class CutterEnv(CutterEnvBase):
 
         arm_location = os.path.join('robots', 'ur5e_cutter_new_calibrated_precise.urdf')
         self.home_joints = [-1.5708, -2.2689, -1.3963, 0.52360, 1.5708, 3.14159]
-        self.robot = URDFRobot(arm_location, [0, 0, 0.02], [0, 0, 0, 1], physicsClientId=self.client_id)
+        self.robot = URDFRobot(arm_location, [0, 0, 0.02], [0, 0, 0, 1], flags=pb.URDF_USE_MATERIAL_COLORS_FROM_MTL,
+                               physicsClientId=self.client_id)
         self.robot.reset_joint_states(self.home_joints)
         self.start_orientation = self.robot.get_link_kinematics('cutpoint')[1]
         self.proj_mat = pb.computeProjectionMatrixFOV(

@@ -364,10 +364,9 @@
     <visual>
       <origin rpy="0 0 0" xyz="0 0 0.006"/>
       <geometry>
-        <!--<mesh filename="ur5e/visual/new_cutter.dae" scale="1.0 1.0 1.0"/>-->
-        <mesh filename="ur5e/collision/new-cutter-convexified.obj" scale="1.0 1.0 1.0"/>
+        <mesh filename="ur5e/visual/cutter_wooden.obj" scale="1.0 1.0 1.0 "/>
       </geometry>
-      <material name="LightGrey"/>
+      <material name="LightGrey" />
     </visual>
 
      <collision>
@@ -447,10 +446,10 @@
     <visual>
       <origin rpy="0 0 0" xyz="0 0 0"/>
       <geometry>
-        <sphere radius="0.002" />
+        <sphere radius="0.00001" />
       </geometry>
       <material name="red">
-        <color rgba="1 0 0 1" />
+        <color rgba="1 0 0 0" />
       </material>
     </visual>
   </link>
@@ -467,10 +466,10 @@
     <visual>
       <origin rpy="0 0 0" xyz="0.0 0.0 0.0"/>
       <geometry>
-        <sphere radius="0.006" />
+        <sphere radius="0.00001" />
       </geometry>
       <material name="green">
-        <color rgba="0 1 0 1" />
+        <color rgba="0 1 0 0" />
       </material>
     </visual>
   </link>
