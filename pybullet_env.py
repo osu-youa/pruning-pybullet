@@ -35,7 +35,6 @@ def pose_to_tf(pos, quat):
     tf[:3,:3] = Rotation.from_quat(quat).as_matrix()
     return tf
 
-
 class CutterEnvBase(gym.Env):
     def __init__(self, width, height, grayscale=False, use_seg=False, use_depth=False, use_flow=False, use_last_frame=False,
                  use_gui=False, img_buffer_size=0):
@@ -151,12 +150,14 @@ class CutterEnv(CutterEnvBase):
     metadata = {'render.modes': ['human']}
 
     def __init__(self, width, height, grayscale=False, use_seg=False, use_depth=False, use_flow=False, use_last_frame=False, max_vel=0.075, action_freq=24, max_elapsed_time=3.0,
-                 min_reward_dist=0.10, use_gui=False, debug=False, img_buffer_size=0):
+                 min_reward_dist=0.10, difficulty=0.0, eval=False, use_gui=False, debug=False, img_buffer_size=0):
         super(CutterEnv, self).__init__(width, height, grayscale=grayscale, use_seg=use_seg, use_depth=use_depth, use_flow=use_flow, use_last_frame=use_last_frame,
                                         use_gui=use_gui, img_buffer_size=img_buffer_size)
 
         # Configuration parameters
         self.debug = debug
+        self.difficulty = difficulty
+        self.eval = eval
         self.action_freq = action_freq
         self.max_elapsed_time = max_elapsed_time
         self.min_reward_dist = min_reward_dist
@@ -256,6 +257,9 @@ class CutterEnv(CutterEnvBase):
 
         self.start_state = pb.saveState(physicsClientId=self.client_id)
 
+    def update_difficulty(self, difficulty):
+        self.difficulty = difficulty
+        return difficulty
 
     def step(self, action, realtime=False):
         # Execute one time step within the environment
@@ -412,7 +416,7 @@ class CutterEnv(CutterEnvBase):
         self.elapsed_time = 0.0
         self.failure = False
         self.in_mouth = False
-        self.speed = np.random.uniform(self.max_vel * 0.5, self.max_vel)
+        self.speed = self.max_vel if self.eval else np.random.uniform(self.max_vel * 0.5, self.max_vel)
         pb.restoreState(stateId=self.start_state, physicsClientId=self.client_id)
 
         self.last_command = np.zeros(2)
@@ -429,8 +433,10 @@ class CutterEnv(CutterEnvBase):
 
         # Initialize an ideal camera transform, but with noise added to the parameters
         tool_tf = self.robot.get_link_kinematics('wrist_3_link-tool0_fixed_joint', as_matrix=True)
-        pan = np.radians(np.random.uniform(-45-5, -45+5))
-        tilt = np.radians(np.random.uniform(45-7.5, 45+7.5))
+        deg_noise = 0 if self.eval else (0.5 + 4.5 * self.difficulty)
+
+        pan = np.radians(np.random.uniform(-45-deg_noise, -45+deg_noise))
+        tilt = np.radians(np.random.uniform(45-deg_noise, 45+deg_noise))
         ideal_view_matrix = camera_util.get_view_matrix(pan, tilt, base_tf=tool_tf)
         ideal_tool_camera_tf = np.linalg.inv(tool_tf) @ np.linalg.inv(ideal_view_matrix)
 
@@ -443,11 +449,32 @@ class CutterEnv(CutterEnvBase):
         self.current_camera_tf = ideal_tool_camera_tf @ noise_tf
 
         # From the selected target on the tree (computed in reset_trees()), figure out the offset for the cutters
+        # The offset has a schedule where at the lowest difficulty, the cutters start out right in front of the
+        # target, and gradually move back as the difficulty increases
+
+        easy_dist = -0.06
+        hard_dist = -0.15
+        easy_dev = 0.005
+        hard_dev = 0.03
+
+        dist_center = easy_dist + (hard_dist - easy_dist) * self.difficulty
+        dev = easy_dev + (hard_dev - easy_dev) * self.difficulty
+        if self.eval:
+            dev = dev / 3.0
+        dist_bounds = (dist_center - dev, dist_center + dev)
+
+        easy_offset = 0.01
+        hard_offset = 0.075
+        offset = easy_offset + (hard_offset - easy_offset) * self.difficulty
+        if self.eval:
+            offset = offset / 3.0
+        offset_bounds = (-offset, offset)
+
         # Convert to world pose and then solve for the IKs
         tf = pose_to_tf(self.target_pose[:3], self.target_pose[3:])
-        offset = np.array([np.random.uniform(-0.10, 0.10),
-                           np.random.uniform(-0.10, 0.10),
-                           np.random.uniform(-0.03, 0.03) - 0.15])
+        offset = np.array([np.random.uniform(*offset_bounds),
+                           np.random.uniform(*offset_bounds),
+                           np.random.uniform(*dist_bounds)])
         cutter_start_pos = homog_tf(tf, offset)
 
         approach_vec = cutter_start_pos - self.target_pose[:3]
@@ -552,8 +579,8 @@ def check_input_variance(model, obs, samples=10, output=False):
 
 if __name__ == '__main__':
 
-    action = 'eval'
-    # action = 'train'
+    # action = 'eval'
+    action = 'train'
     use_trained = True
     width = 424
     height = 240
@@ -571,39 +598,46 @@ if __name__ == '__main__':
                                                        f='_flow' if use_flow else '', l='_uselast' if use_last_frame else '')
 
     if action == 'train':
-
-
-        def make_env(monitor=False, with_gui=False):
+        def make_env(monitor=False, with_gui=False, eval=False):
             env = CutterEnv(width, height, grayscale=grayscale, use_seg=use_seg, use_depth=use_depth, use_flow=use_flow,
-                             use_last_frame=use_last_frame, use_gui=with_gui, max_elapsed_time=1.5, max_vel=0.05, debug=False)
+                             use_last_frame=use_last_frame, use_gui=with_gui, max_elapsed_time=1.5, max_vel=0.05, difficulty=0.0, debug=False,
+                            eval=eval)
             if monitor:
                 env = Monitor(env)
             return env
 
         env = VecTransposeImage(SubprocVecEnv([make_env] * num_envs))
-        # env = (VecTransposeImage(DummyVecEnv([partial(make_env, monitor=True)])))
-        eval_env = (VecTransposeImage(DummyVecEnv([partial(make_env, monitor=True)])))
+        eval_env = (VecTransposeImage(DummyVecEnv([partial(make_env, monitor=True, eval=True)])))
 
         n_steps = 600 // num_envs
         batch_size = 60
-        eval_callback = EvalCallback(eval_env, best_model_save_path='./', log_path='./', eval_freq=n_steps, n_eval_episodes=10,
+        eval_callback = EvalCallback(eval_env, best_model_save_path='./', log_path='./', eval_freq=n_steps, n_eval_episodes=12,
                                      deterministic=True, render=False)
 
-        # model_file = '{}.model'.format(eval_env.model_name)
         model = PPO("CnnPolicy", env, batch_size=batch_size, n_steps=n_steps, verbose=1, device='auto')
 
         print('Learning...')
+        difficulties = [0.0, 0.2, 0.4, 0.6, 0.8, 1.0]
+        steps_per_difficulty = 8040
+        for difficulty in difficulties:
 
-        model.learn(total_timesteps=50000, callback=eval_callback)
-        print('Done learning!')
-        # model.save(model_file)
+            print('STARTING LEARNING FOR DIFFICULTY {}'.format(difficulty))
+            env.env_method('update_difficulty', difficulty)
+            eval_env.env_method('update_difficulty', difficulty)
+            model.learn(total_timesteps=steps_per_difficulty)
+
+            difficulty_str = str(difficulty).replace('.', '_')
+            os.rename('evaluations.npz', f'evaluations_{difficulty_str}.npz')
+            os.rename('best_model.zip', f'best_model_{difficulty_str}.zip')
+            model = model.load(f'best_model_{difficulty_str}.zip', env=env)
 
     elif action == 'eval':
         timesteps, buffer_size = (150, 450) if record else (1000, 0)
 
         # env = CutterEnv(159, 90, use_seg=use_seg, use_depth=use_depth, use_gui=True, max_elapsed_time=2.5, max_vel=0.05, debug=True)
         env = CutterEnv(width, height, grayscale=grayscale, use_seg=use_seg, use_depth=use_depth, use_flow=use_flow, use_last_frame=use_last_frame,
-                        use_gui=True, max_elapsed_time=1.0, max_vel=0.05, debug=True, img_buffer_size=buffer_size)
+                        use_gui=True, max_elapsed_time=1.0, max_vel=0.05, debug=True, img_buffer_size=buffer_size,
+                        eval=True, difficulty=1.0)
         model = PPO("CnnPolicy", env, verbose=1)
         # model_file = '{}.model'.format(env.model_name)
         if use_trained:
@@ -617,7 +651,6 @@ if __name__ == '__main__':
                 action, _states = model.predict(obs, deterministic=True)
                 if variance_debug:
                     check_input_variance(model, obs, output=True)
-
             else:
                 # action = env.action_space.sample()
                 action = np.array([1.0, 0.0])
