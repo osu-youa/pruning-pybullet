@@ -1,7 +1,7 @@
-# Blender MTL File: 'mock-cutter-texturing-test.blend'
+# Blender MTL File: 'mock-cutter-setup.blend'
 # Material Count: 1
 
-newmtl UVWood
+newmtl Material.001
 Ns 225.000000
 Ka 1.000000 1.000000 1.000000
 Kd 0.800000 0.800000 0.800000
