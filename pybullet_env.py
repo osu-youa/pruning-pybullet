@@ -620,16 +620,21 @@ if __name__ == '__main__':
         difficulties = [0.0, 0.2, 0.4, 0.6, 0.8, 1.0]
         steps_per_difficulty = 8040
         for difficulty in difficulties:
-
-            print('STARTING LEARNING FOR DIFFICULTY {}'.format(difficulty))
-            env.env_method('update_difficulty', difficulty)
-            eval_env.env_method('update_difficulty', difficulty)
-            model.learn(total_timesteps=steps_per_difficulty)
-
             difficulty_str = str(difficulty).replace('.', '_')
-            os.rename('evaluations.npz', f'evaluations_{difficulty_str}.npz')
-            os.rename('best_model.zip', f'best_model_{difficulty_str}.zip')
+            model_file = f'best_model_{difficulty_str}.zip'
+            if not os.path.exists(model_file):
+
+                print('STARTING LEARNING FOR DIFFICULTY {}'.format(difficulty))
+                env.env_method('update_difficulty', difficulty)
+                eval_env.env_method('update_difficulty', difficulty)
+                model.learn(total_timesteps=steps_per_difficulty, callback=eval_callback)
+                os.rename('evaluations.npz', f'evaluations_{difficulty_str}.npz')
+                os.rename('best_model.zip', f'best_model_{difficulty_str}.zip')
+                raise Exception('Done, restart')        # BUG WHERE NEXT DIFFICULTY WON'T OUTPUT MODEL
+            else:
+                print('Difficulty {} has already been learned!'.format(difficulty))
             model = model.load(f'best_model_{difficulty_str}.zip', env=env)
+
 
     elif action == 'eval':
         timesteps, buffer_size = (150, 450) if record else (1000, 0)
@@ -641,9 +646,10 @@ if __name__ == '__main__':
         model = PPO("CnnPolicy", env, verbose=1)
         # model_file = '{}.model'.format(env.model_name)
         if use_trained:
-            model_file = 'best_model.zip'
+            model_file = 'best_model_1_0.zip'
             if os.path.exists(model_file):
                 model = model.load(model_file)
+                print('Using best model!')
         obs = env.reset()
         all_dists = []
         for i in range(timesteps):
