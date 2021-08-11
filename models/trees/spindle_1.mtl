@@ -1,0 +1,7 @@
+newmtl Grapefruit_Bark
+Ka 0 0 0
+Ns 8.16617
+Ks 1 1 1
+Kd 0.1936 0.194817 0.188861
+map_Kd textures/Untitled_Grapefruit_Bark_Bark3_Color.png
+map_Bump textures/Untitled_Grapefruit_Bark_Bark3NOR_Normal.png

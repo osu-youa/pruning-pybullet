@@ -23,6 +23,7 @@ import matplotlib.pyplot as plt
 import gym
 from gym import spaces
 
+BASE_ROT = [0.7071, 0, 0, 0.7071]
 
 def homog_tf(tf, pt):
     homog_pt = np.ones(4)
@@ -220,6 +221,10 @@ class CutterEnv(CutterEnvBase):
         # Create pose database
         self.poses = self.load_pose_database()
 
+        # Load trellis
+        self.trellis_id = self.load_mesh(os.path.join('models', 'trellis-setup.obj'), pos=[0, 2.0, 0],
+                                         orientation=BASE_ROT)
+
         # Load wall and wall textures
         wall_folder = os.path.join('models', 'wall_textures')
         self.wall_textures = [pb.loadTexture(os.path.join(wall_folder, file)) for file in os.listdir(wall_folder) if file.endswith('.png')]
@@ -243,19 +248,31 @@ class CutterEnv(CutterEnvBase):
             tree_model_files = tree_model_files * 3
 
         for file in tree_model_files:
-            path = os.path.join(tree_models_directory, file)
-            viz = pb.createVisualShape(shapeType=pb.GEOM_MESH, fileName=path, physicsClientId=self.client_id)
-            col = pb.createCollisionShape(shapeType=pb.GEOM_MESH, fileName=path.replace('.obj', '-collision.obj'), physicsClientId=self.client_id)
 
-            tree_id = pb.createMultiBody(baseMass=0, baseVisualShapeIndex=viz, baseCollisionShapeIndex=col, basePosition=[-10, 5, 0],
-                                         baseOrientation=[0.7071, 0, 0, 0.7071], physicsClientId=self.client_id)
+            path = os.path.join(tree_models_directory, file)
+            col_path = path.replace('.obj', '-collision.obj')
+            tree_id = self.load_mesh(path, col_path, pos=[-10, 5, 0], orientation=BASE_ROT)
             annotation_path = path.replace('.obj', '.annotations')
             with open(annotation_path, 'rb') as fh:
                 annotations = pickle.load(fh)
-
             self.tree_model_metadata[tree_id] = annotations
 
         self.start_state = pb.saveState(physicsClientId=self.client_id)
+
+    def load_mesh(self, mesh_file, col_file=None, mass=0, pos=None, orientation=None):
+        viz = pb.createVisualShape(shapeType=pb.GEOM_MESH, fileName=mesh_file, physicsClientId=self.client_id)
+        if col_file is None:
+            col = pb.createCollisionShape(shapeType=pb.GEOM_BOX, halfExtents=[0.001, 0.001, 0.001], physicsClientId=self.client_id)
+        else:
+            col = pb.createCollisionShape(shapeType=pb.GEOM_MESH, fileName=col_file, physicsClientId=self.client_id)
+        if pos is None:
+            pos = [0, 0, 0]
+        if orientation is None:
+            orientation = [0, 0, 0, 1]
+        return pb.createMultiBody(baseMass=mass, baseVisualShapeIndex=viz, baseCollisionShapeIndex=col,
+                                  basePosition=pos, baseOrientation=orientation,
+                                  physicsClientId=self.client_id)
+
 
     def update_difficulty(self, difficulty):
         self.difficulty = difficulty
@@ -422,7 +439,7 @@ class CutterEnv(CutterEnvBase):
         self.last_command = np.zeros(2)
 
         # Modify the scenery
-        self.reset_trees(wall_in_front=np.random.randint(2))
+        self.reset_trees()
         self.randomize()
 
         # Reset the image noise parameters
@@ -491,14 +508,12 @@ class CutterEnv(CutterEnvBase):
     def render(self, mode='human', close=False):
         print('Last dist: {:.3f}'.format(self.get_cutter_dist()))
 
-    def reset_trees(self, wall_in_front=False):
+    def reset_trees(self):
 
         # Determine the spacing for the wall
-        wall_range = (1, 2) if wall_in_front else (8, 10)
-        tree_range = (8, 10) if wall_in_front else (3, 5)
-        side_wall_range = (2, 6)
+        wall_range = (0.5, 1)
+        side_wall_range = (2, 10)
         wall_offset = np.random.uniform(*wall_range)
-        tree_offset = np.random.uniform(*tree_range)
         side_wall_offset = np.random.uniform(*side_wall_range)
 
         # Select one of the trees from the tree model metadata
@@ -517,25 +532,38 @@ class CutterEnv(CutterEnvBase):
         tree_frame_pt = self.tree_model_metadata[self.target_tree][self.target_id]['position']
         target_tree_target_tf = np.identity(4)
         target_tree_target_tf[:3,3] = self.target_pose[:3]
-        target_tree_target_tf[:3,:3] = Rotation.from_quat([0.7071, 0, 0, 0.7071]).as_matrix()
+        target_tree_target_tf[:3,:3] = Rotation.from_quat(BASE_ROT).as_matrix()
         base_loc = homog_tf(target_tree_target_tf, -tree_frame_pt)
 
-        pb.resetBasePositionAndOrientation(bodyUniqueId=self.target_tree, posObj=base_loc, ornObj=[0.7071, 0, 0, 0.7071], physicsClientId=self.client_id)
+        pb.resetBasePositionAndOrientation(bodyUniqueId=self.target_tree, posObj=base_loc, ornObj=BASE_ROT, physicsClientId=self.client_id)
 
-        # Move the wall and background trees into place
+        # Determine the spacing of the three trees, and select the index to associate with the branch
+        # Then move the trellis into position accordingly
+        trellis_base_pos = np.array([-0.43, 0, 0.43]) + np.random.uniform(-0.03, 0.03, size=3)
+        trellis_height = 0.70
+        chosen_idx = np.random.randint(3)
+        other_idx = [0, 1, 2]
+        other_idx.remove(chosen_idx)
+
+        trellis_loc = np.array([base_loc[0] - trellis_base_pos[chosen_idx], base_loc[1], trellis_height])
+        pb.resetBasePositionAndOrientation(bodyUniqueId=self.trellis_id, posObj=trellis_loc, ornObj=BASE_ROT, physicsClientId=self.client_id)
+
+        # Move walls and the other trees into position, and any excess trees off into the background
+        for tree_id, leader_idx in zip(all_trees[:len(other_idx)], other_idx):
+            pb.resetBasePositionAndOrientation(bodyUniqueId=tree_id, posObj=[trellis_loc[0] + trellis_base_pos[leader_idx], trellis_loc[1], trellis_height],
+                                               ornObj=BASE_ROT, physicsClientId=self.client_id)
+
+        for tree_id in all_trees[len(other_idx):]:
+            pb.resetBasePositionAndOrientation(bodyUniqueId=tree_id, posObj=[-10, -10, 0], ornObj=BASE_ROT, physicsClientId=self.client_id)
+
         pb.resetBasePositionAndOrientation(bodyUniqueId=self.wall_id, posObj=[0, base_loc[1] + wall_offset, 7.5],
                                            ornObj=[0, 0, 0, 1], physicsClientId=self.client_id)
 
         pb.resetBasePositionAndOrientation(bodyUniqueId=self.side_wall_id, posObj=[side_wall_offset, 0, 7.5], ornObj=[0,0,0,1],
                                            physicsClientId=self.client_id)
 
-
-        offsets = np.arange(len(all_trees))
-        offsets = (offsets - offsets.mean()) * 2
-        bg_offset = base_loc[1] + tree_offset
-        for bg_tree, offset in zip(all_trees, offsets):
-            base_offset = np.array([np.random.uniform(-0.10, 0.10) + offset, np.random.uniform(-0.10, 0.10) + bg_offset, 0])
-            pb.resetBasePositionAndOrientation(bodyUniqueId=bg_tree, posObj=base_offset, ornObj=[0.7071, 0, 0, 0.7071], physicsClientId=self.client_id)
+        import pdb
+        pdb.set_trace()
 
     def randomize(self):
         # Resets ground and wall texture
