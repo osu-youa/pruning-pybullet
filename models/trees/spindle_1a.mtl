@@ -1,0 +1,7 @@
+newmtl Yucca_Bark
+Ka 0 0 0
+Ns 13.1971
+Ks 0 0 0
+Kd 0.306956 0.285551 0.251129
+map_Kd textures/Spindle_Setup_3_Yucca_Bark_BarkYucca_Color.png
+map_Bump textures/Spindle_Setup_3_Yucca_Bark_BarkYucca_n_Normal.png

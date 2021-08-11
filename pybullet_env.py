@@ -562,9 +562,6 @@ class CutterEnv(CutterEnvBase):
         pb.resetBasePositionAndOrientation(bodyUniqueId=self.side_wall_id, posObj=[side_wall_offset, 0, 7.5], ornObj=[0,0,0,1],
                                            physicsClientId=self.client_id)
 
-        import pdb
-        pdb.set_trace()
-
     def randomize(self):
         # Resets ground and wall texture
         pb.changeVisualShape(objectUniqueId=self.plane_id, linkIndex=-1, textureUniqueId=self.plane_textures[np.random.choice(len(self.plane_textures))],
