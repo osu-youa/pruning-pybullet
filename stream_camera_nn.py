@@ -6,6 +6,7 @@ from pybullet_env import CutterEnvBase, check_input_variance
 from stable_baselines3 import PPO
 import cv2
 import time
+from PIL import Image
 
 
 class RealCutterEnv(CutterEnvBase):
@@ -61,7 +62,8 @@ if __name__ == '__main__':
 
     # action = 'server'
     action = 'eval'
-    forward_speed = 0.05
+    save_img = True
+    forward_speed = 0.03
 
     width = 424
     height = 240
@@ -77,9 +79,11 @@ if __name__ == '__main__':
                             use_flow=use_flow, use_last_frame=use_last_frame, use_gui=True)
         model = PPO("CnnPolicy", env, verbose=1)
         # model_file = '{}.model'.format(env.model_name)
-        model_file = 'best_model.zip'
+        model_file = 'best_model_0_4.zip'
         if os.path.exists(model_file):
             model = model.load(model_file)
+        else:
+            raise Exception()
 
 
         if action == 'eval':
@@ -90,12 +94,21 @@ if __name__ == '__main__':
 
             for i in range(num_frames):
                 obs = env.get_obs()
-                action = model.predict(obs)[0]
+                action = model.predict(obs, deterministic=True)[0]
+                env.set_action(action)
                 action_hist.append(action)
                 print(action)
                 env.set_title('Frame {}'.format(i))
 
-                check_input_variance(model, obs, output=True)
+                if save_img:
+                    obs = obs[:,:,:3]
+                    im = Image.fromarray(obs)
+                    save_path = os.path.join('images', f'{i}.png')
+                    im.save(save_path)
+                    time.sleep(0.5)
+
+
+                # check_input_variance(model, obs, output=True)
 
             end = time.time()
             print('Ran at {:.2f} fps'.format(num_frames / (end - start)))
@@ -110,7 +123,7 @@ if __name__ == '__main__':
 
             import socket
 
-            ADDRESS = '192.168.2.227'
+            ADDRESS = '169.254.63.255'
             PORT = 10000
 
             sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -128,9 +141,12 @@ if __name__ == '__main__':
                     while True:
                         obs = env.get_obs()
                         action = model.predict(obs, deterministic=True)[0]
-                        array = np.array([action[0], action[1], 0]) * forward_speed
+                        env.set_action(action)
+                        # array = np.array([0, 0, -0.01])
+                        print(action)
+                        # TEMPORARILY APPLY NEGATIVE DUE TO FRAME ISSUE
+                        array = np.array([-action[0], -action[1], 1]) * forward_speed
                         connection.sendall(array.tostring())
-                        time.sleep(0.1)
                 finally:
                     connection.close()
                     print('Connection terminated, waiting for new connection...')

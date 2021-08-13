@@ -21,6 +21,11 @@ if __name__ == "__main__":
         path = os.path.join(tree_dir, file)
         annotations = path.replace('.obj', '-annotations.obj')
         collisions = path.replace('.obj', '-collision.obj')
+        output_file = path.replace('.obj', '.annotations')
+
+        if os.path.exists(output_file):
+            print('Annotations for {} loaded, skipping'.format(file))
+            continue
 
         if not os.path.exists(annotations):
             print('[!] No annotations file found for {}, extract faces in Blender!'.format(file))
@@ -58,7 +63,7 @@ if __name__ == "__main__":
 
             metadata[i] = {'position': position, 'points': np.array(points_to_concat)}
 
-        output_file = path.replace('.obj', '.annotations')
+
         with open(output_file, 'wb') as fh:
             pickle.dump(metadata, fh)
         print('Output annotations to: {}'.format(output_file))

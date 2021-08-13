@@ -69,8 +69,14 @@ class CutterEnvBase(gym.Env):
         if self.use_gui:
             plt.ion()
             self.fig = plt.figure()
-            self.axs = [self.fig.add_subplot(ind) for ind in [121, 122]]
-            self.imgs = [ax.imshow(np.zeros((height, width), dtype=np.uint8)) for ax in self.axs]
+            self.img_ax = self.fig.add_subplot(121)
+            self.img = self.img_ax.imshow(np.zeros((height, width), dtype=np.uint8))
+
+            self.action_ax = self.fig.add_subplot(122)
+            self.action_ax.set_xlim(-1, 1)
+            self.action_ax.set_ylim(-1, 1)
+            self.arrow = None
+
             self.fig.canvas.draw()
             plt.pause(0.01)
 
@@ -117,8 +123,8 @@ class CutterEnvBase(gym.Env):
                 #     plt.show()
 
             layers.append(flow_img)
-            if self.use_gui:
-                self.imgs[1].set_data(np.dstack([flow_img] * 3))
+            # if self.use_gui:
+            #     self.imgs[1].set_data(np.dstack([flow_img] * 3))
 
         if self.use_last_frame:
             layers.append(self.last_grayscale if self.last_grayscale is not None else grayscale)
@@ -126,7 +132,7 @@ class CutterEnvBase(gym.Env):
         self.last_grayscale = grayscale
 
         if self.use_gui:
-            self.imgs[0].set_data(rgb_img)
+            self.img.set_data(rgb_img)
             self.fig.canvas.draw()
             plt.pause(0.01)
 
@@ -143,7 +149,13 @@ class CutterEnvBase(gym.Env):
         raise NotImplementedError()
 
     def set_title(self, title):
-        self.axs[0].set_title(title)
+        self.img_ax.set_title(title)
+
+    def set_action(self, action):
+        if self.arrow is not None:
+            self.arrow.remove()
+        self.arrow = self.action_ax.arrow(0, 0, action[0], action[1])
+        self.action_ax.set_title('{:.3f}, {:.3f}'.format(*action))
 
 
 class CutterEnv(CutterEnvBase):
@@ -176,6 +188,7 @@ class CutterEnv(CutterEnvBase):
         self.target_tree = None             # Which tree model is in front?
         self.target_id = None               # Which of the side branches are we aiming at on the target tree?
         self.target_tf = np.identity(4)     # What is the next waypoint for the cutter?
+        self.in_mouth_counter = 0           # How many consecutive time units has the branch been in the cutter?
         self.approach_vec = None            # Unit vector pointing towards the target from the cutter start position
         self.approach_history = []          # Keeps track of best approach distances
         self.speed = max_vel
@@ -222,14 +235,15 @@ class CutterEnv(CutterEnvBase):
         self.poses = self.load_pose_database()
 
         # Load trellis
-        self.trellis_id = self.load_mesh(os.path.join('models', 'trellis-setup.obj'), pos=[0, 2.0, 0],
-                                         orientation=BASE_ROT)
+        self.trellis_id = self.load_mesh(os.path.join('models', 'trellis-setup.obj'), col_file=os.path.join('models', 'trellis-setup-collision.obj'),
+                                         pos=[0, 2.0, 0], orientation=BASE_ROT)
 
         # Load wall and wall textures
         wall_folder = os.path.join('models', 'wall_textures')
         self.wall_textures = [pb.loadTexture(os.path.join(wall_folder, file)) for file in os.listdir(wall_folder) if file.endswith('.png')]
-        wall_viz = pb.createVisualShape(shapeType=pb.GEOM_BOX, halfExtents=[10, 0.01, 7.5], physicsClientId=self.client_id)
-        wall_col = pb.createCollisionShape(shapeType=pb.GEOM_BOX, halfExtents=[10, 0.01, 7.5], physicsClientId=self.client_id)
+        self.wall_dim = [4, 0.01, 1.5]
+        wall_viz = pb.createVisualShape(shapeType=pb.GEOM_BOX, halfExtents=self.wall_dim, physicsClientId=self.client_id)
+        wall_col = pb.createCollisionShape(shapeType=pb.GEOM_BOX, halfExtents=self.wall_dim, physicsClientId=self.client_id)
         self.wall_id = pb.createMultiBody(baseMass=0, baseVisualShapeIndex=wall_viz, baseCollisionShapeIndex=wall_col, basePosition=[0, 15, 7.5],
                                           baseOrientation=[0,0,0,1], physicsClientId=self.client_id)
 
@@ -330,11 +344,16 @@ class CutterEnv(CutterEnvBase):
                                                          point_frame_tf=base_tf, plot_debug=False)
         self.failure = not self.in_mouth and \
                        (approach_dist < -self.fail_threshold or self.robot.query_ghost_body_collision('failure', tree_pts, point_frame_tf=base_tf, plot_debug=False))
+        if self.in_mouth:
+            self.in_mouth_counter += 1
+        else:
+            self.in_mouth_counter = 0
 
+        if self.debug and self.in_mouth_counter >= 3:
+            print('In-mouth consecutive 3 times, terminating...')
 
-
-        # Done conditions: Failure, time elapsed, cutter is in mouth and within threshold
-        done =  self.failure or (self.elapsed_time >= self.max_elapsed_time) or (self.in_mouth and approach_dist < self.pass_threshold) or no_improvement
+        # Done conditions: Failure, time elapsed, cutter is in mouth and within threshold, mouth counter is sufficiently high
+        done =  self.failure or (self.elapsed_time >= self.max_elapsed_time) or (self.in_mouth and approach_dist < self.pass_threshold) or no_improvement or self.in_mouth_counter >= 3
         reward = self.get_reward(vel_command, done)
 
         self.last_command = vel_command
@@ -431,6 +450,7 @@ class CutterEnv(CutterEnvBase):
             print('Reset! (Elapsed time {:.2f}s)'.format(self.elapsed_time))
 
         self.elapsed_time = 0.0
+        self.in_mouth_counter = 0
         self.failure = False
         self.in_mouth = False
         self.speed = self.max_vel if self.eval else np.random.uniform(self.max_vel * 0.5, self.max_vel)
@@ -545,18 +565,18 @@ class CutterEnv(CutterEnvBase):
         other_idx = [0, 1, 2]
         other_idx.remove(chosen_idx)
 
-        trellis_loc = np.array([base_loc[0] - trellis_base_pos[chosen_idx], base_loc[1], trellis_height])
+        trellis_loc = np.array([base_loc[0] - trellis_base_pos[chosen_idx], self.target_pose[1] + np.random.uniform(0, 0.02), trellis_height])
         pb.resetBasePositionAndOrientation(bodyUniqueId=self.trellis_id, posObj=trellis_loc, ornObj=BASE_ROT, physicsClientId=self.client_id)
 
         # Move walls and the other trees into position, and any excess trees off into the background
         for tree_id, leader_idx in zip(all_trees[:len(other_idx)], other_idx):
-            pb.resetBasePositionAndOrientation(bodyUniqueId=tree_id, posObj=[trellis_loc[0] + trellis_base_pos[leader_idx], trellis_loc[1], trellis_height],
+            pb.resetBasePositionAndOrientation(bodyUniqueId=tree_id, posObj=[trellis_loc[0] + trellis_base_pos[leader_idx], trellis_loc[1] + np.random.uniform(-0.02, 0.02), trellis_height],
                                                ornObj=BASE_ROT, physicsClientId=self.client_id)
 
         for tree_id in all_trees[len(other_idx):]:
-            pb.resetBasePositionAndOrientation(bodyUniqueId=tree_id, posObj=[-10, -10, 0], ornObj=BASE_ROT, physicsClientId=self.client_id)
+            pb.resetBasePositionAndOrientation(bodyUniqueId=tree_id, posObj=[-20, -20, 0], ornObj=BASE_ROT, physicsClientId=self.client_id)
 
-        pb.resetBasePositionAndOrientation(bodyUniqueId=self.wall_id, posObj=[0, base_loc[1] + wall_offset, 7.5],
+        pb.resetBasePositionAndOrientation(bodyUniqueId=self.wall_id, posObj=[0, base_loc[1] + wall_offset, self.wall_dim[2]],
                                            ornObj=[0, 0, 0, 1], physicsClientId=self.client_id)
 
         pb.resetBasePositionAndOrientation(bodyUniqueId=self.side_wall_id, posObj=[side_wall_offset, 0, 7.5], ornObj=[0,0,0,1],
@@ -585,7 +605,7 @@ class CutterEnv(CutterEnvBase):
         except FileNotFoundError:
             target_xs = np.linspace(-0.3, 0.3, num=25, endpoint=True)
             target_ys = np.linspace(0.75, 0.95, num=17, endpoint=True)
-            target_zs = np.linspace(0.8, 1.3, num=25, endpoint=True)
+            target_zs = np.linspace(0.9, 1.3, num=25, endpoint=True)
             all_poses = [[x, y, z] + list(self.start_orientation) for x, y, z in
                          product(target_xs, target_ys, target_zs)]
             poses = self.robot.determine_reachable_target_poses('cutpoint', all_poses, self.home_joints, max_iters=100)
@@ -636,13 +656,13 @@ if __name__ == '__main__':
 
         n_steps = 600 // num_envs
         batch_size = 60
-        eval_callback = EvalCallback(eval_env, best_model_save_path='./', log_path='./', eval_freq=n_steps, n_eval_episodes=12,
-                                     deterministic=True, render=False)
+
 
         model = PPO("CnnPolicy", env, batch_size=batch_size, n_steps=n_steps, verbose=1, device='auto')
 
         print('Learning...')
-        difficulties = [0.0, 0.2, 0.4, 0.6, 0.8, 1.0]
+        # difficulties = [0.0, 0.2, 0.4, 0.6, 0.8, 1.0]
+        difficulties = [0.4, 0.6, 0.8, 1.0]
         steps_per_difficulty = 8040
         for difficulty in difficulties:
             difficulty_str = str(difficulty).replace('.', '_')
@@ -652,10 +672,13 @@ if __name__ == '__main__':
                 print('STARTING LEARNING FOR DIFFICULTY {}'.format(difficulty))
                 env.env_method('update_difficulty', difficulty)
                 eval_env.env_method('update_difficulty', difficulty)
+
+                eval_callback = EvalCallback(eval_env, best_model_save_path='./', log_path='./', eval_freq=n_steps,
+                                             n_eval_episodes=12,
+                                             deterministic=True, render=False)
                 model.learn(total_timesteps=steps_per_difficulty, callback=eval_callback)
                 os.rename('evaluations.npz', f'evaluations_{difficulty_str}.npz')
                 os.rename('best_model.zip', f'best_model_{difficulty_str}.zip')
-                raise Exception('Done, restart')        # BUG WHERE NEXT DIFFICULTY WON'T OUTPUT MODEL
             else:
                 print('Difficulty {} has already been learned!'.format(difficulty))
             model = model.load(f'best_model_{difficulty_str}.zip', env=env)
@@ -667,11 +690,11 @@ if __name__ == '__main__':
         # env = CutterEnv(159, 90, use_seg=use_seg, use_depth=use_depth, use_gui=True, max_elapsed_time=2.5, max_vel=0.05, debug=True)
         env = CutterEnv(width, height, grayscale=grayscale, use_seg=use_seg, use_depth=use_depth, use_flow=use_flow, use_last_frame=use_last_frame,
                         use_gui=True, max_elapsed_time=1.0, max_vel=0.05, debug=True, img_buffer_size=buffer_size,
-                        eval=True, difficulty=1.0)
+                        eval=True, difficulty=0.4)
         model = PPO("CnnPolicy", env, verbose=1)
         # model_file = '{}.model'.format(env.model_name)
         if use_trained:
-            model_file = 'best_model_1_0.zip'
+            model_file = 'best_model_0_4.zip'
             if os.path.exists(model_file):
                 model = model.load(model_file)
                 print('Using best model!')
@@ -686,6 +709,7 @@ if __name__ == '__main__':
                 # action = env.action_space.sample()
                 action = np.array([1.0, 0.0])
 
+            env.set_action(action)
             obs, reward, done, info = env.step(action, realtime=True)
             # env.render()
             if done:
