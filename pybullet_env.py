@@ -4,7 +4,6 @@ import pybullet_data
 import numpy as np
 import os
 from helloworld import URDFRobot
-# from utils import PerlinNoiseBuffer, overlay_noise
 import random
 import pickle
 from scipy.spatial.transform import Rotation
@@ -198,6 +197,7 @@ class CutterEnv(CutterEnvBase):
         self.mesh_points = {}
         self.last_command = np.zeros(2)
         self.lighting = None                # Location of light source
+        self.lighting_color = [1, 1, 1]
         self.contrast = None                # Contrast adjustment factor
 
         # Simulation tools - Some are only for seg masks!
@@ -205,8 +205,6 @@ class CutterEnv(CutterEnvBase):
         self.max_depth_sigma = 5.0
         self.max_tree_sigma = 5.0
         self.max_noise_alpha = 0.3
-        # self.current_depth_noise = (None, None, None)       # Sigma, noise image, noise alpha
-        # self.current_tree_noise = (None, None, None)
 
         # Setup Pybullet simulation
 
@@ -244,9 +242,12 @@ class CutterEnv(CutterEnvBase):
         self.wall_dim = [4, 0.01, 1.5]
         wall_viz = pb.createVisualShape(shapeType=pb.GEOM_BOX, halfExtents=self.wall_dim, physicsClientId=self.client_id)
         wall_col = pb.createCollisionShape(shapeType=pb.GEOM_BOX, halfExtents=self.wall_dim, physicsClientId=self.client_id)
-        self.wall_id = pb.createMultiBody(baseMass=0, baseVisualShapeIndex=wall_viz, baseCollisionShapeIndex=wall_col, basePosition=[0, 15, 7.5],
-                                          baseOrientation=[0,0,0,1], physicsClientId=self.client_id)
 
+        self.wall_id = pb.loadURDF("plane.urdf", physicsClientId=self.client_id)
+
+        # self.wall_id = pb.createMultiBody(baseMass=0, baseVisualShapeIndex=wall_viz, baseCollisionShapeIndex=wall_col, basePosition=[0, 15, 7.5],
+        #                                   baseOrientation=[0,0,0,1], physicsClientId=self.client_id)
+        #
         side_wall_viz = pb.createVisualShape(shapeType=pb.GEOM_BOX, halfExtents=[0.01, 10.0, 7.5], physicsClientId=self.client_id)
         side_wall_col = pb.createCollisionShape(shapeType=pb.GEOM_BOX, halfExtents=[0.01, 10.0, 7.5],
                                            physicsClientId=self.client_id)
@@ -270,6 +271,10 @@ class CutterEnv(CutterEnvBase):
             with open(annotation_path, 'rb') as fh:
                 annotations = pickle.load(fh)
             self.tree_model_metadata[tree_id] = annotations
+
+        # OTHER TEXTURES LIBRARY - LOADED IN THEIR RESPECTIVE FUNCTIONS
+        self.canonical_textures = {}
+        self.random_textures = []
 
         self.start_state = pb.saveState(physicsClientId=self.client_id)
 
@@ -359,7 +364,7 @@ class CutterEnv(CutterEnvBase):
         self.last_command = vel_command
         return self.get_obs(), reward, done, {}
 
-    def get_images(self):
+    def get_images(self, canonical=False):
         view_matrix = self.robot.get_link_kinematics('wrist_3_link-tool0_fixed_joint',
                                                      as_matrix=True) @ self.current_camera_tf
         _, _, rgb_img, raw_depth_img, raw_seg_img = pb.getCameraImage(
@@ -368,15 +373,17 @@ class CutterEnv(CutterEnvBase):
             viewMatrix=np.linalg.inv(view_matrix).T.reshape(-1),
             projectionMatrix=self.proj_mat,
             renderer=pb.ER_TINY_RENDERER,
-            lightDirection=self.lighting,
+            lightDirection=[0, 0, 5] if canonical else self.lighting,
+            lightColor=[1, 1, 1] if canonical else self.lighting_color,
             shadow=True,
             physicsClientId=self.client_id
         )
 
         rgb_img = rgb_img[:, :, :3]
-        pil_img = Image.fromarray(rgb_img, 'RGB')
-        enhancer = ImageEnhance.Contrast(pil_img)
-        rgb_img = np.asarray(enhancer.enhance(self.contrast))
+        if not canonical:
+            pil_img = Image.fromarray(rgb_img, 'RGB')
+            enhancer = ImageEnhance.Contrast(pil_img)
+            rgb_img = np.asarray(enhancer.enhance(self.contrast))
 
         depth_img = None
         if self.use_depth:
@@ -576,8 +583,8 @@ class CutterEnv(CutterEnvBase):
         for tree_id in all_trees[len(other_idx):]:
             pb.resetBasePositionAndOrientation(bodyUniqueId=tree_id, posObj=[-20, -20, 0], ornObj=BASE_ROT, physicsClientId=self.client_id)
 
-        pb.resetBasePositionAndOrientation(bodyUniqueId=self.wall_id, posObj=[0, base_loc[1] + wall_offset, self.wall_dim[2]],
-                                           ornObj=[0, 0, 0, 1], physicsClientId=self.client_id)
+        pb.resetBasePositionAndOrientation(bodyUniqueId=self.wall_id, posObj=[0, base_loc[1] + wall_offset, 0],
+                                           ornObj=BASE_ROT, physicsClientId=self.client_id)
 
         pb.resetBasePositionAndOrientation(bodyUniqueId=self.side_wall_id, posObj=[side_wall_offset, 0, 7.5], ornObj=[0,0,0,1],
                                            physicsClientId=self.client_id)
@@ -592,10 +599,18 @@ class CutterEnv(CutterEnvBase):
                              textureUniqueId=self.wall_textures[np.random.choice(len(self.wall_textures))],
                              physicsClientId=self.client_id)
 
+        self.randomize_lighting_and_contrast()
+
+    def randomize_lighting_and_contrast(self, include_color=False):
         self.lighting = np.random.uniform(-1.0, 1.0, 3)
         self.lighting[2] = np.abs(self.lighting[2])
         self.lighting *= np.random.uniform(8.0, 16.0) / np.linalg.norm(self.lighting)
         self.contrast = np.random.uniform(0.5, 2.0)
+        if include_color:
+            self.lighting_color = np.random.uniform(size=3)
+        else:
+            self.lighting_color = [1.0, 1.0, 1.0]
+
 
     def load_pose_database(self):
         db_file = 'pose_database.pickle'
@@ -612,6 +627,53 @@ class CutterEnv(CutterEnvBase):
             with open(db_file, 'wb') as fh:
                 pickle.dump(poses, fh)
             return poses
+
+    def set_texture(self, obj_id, texture, link_id=-1):
+        pb.changeVisualShape(objectUniqueId=obj_id, textureUniqueId=texture, linkIndex=link_id,
+                             physicsClientId=self.client_id)
+
+    def set_random(self):
+
+        self.randomize_lighting_and_contrast(include_color=True)
+
+        if not self.random_textures:
+            print('Loading random textures...')
+            texture_dir = os.path.join(os.path.expanduser('~'), 'Documents', 'TexturesProcessed')
+            for file in os.listdir(texture_dir):
+                self.random_textures.append(pb.loadTexture(os.path.join(texture_dir, file), physicsClientId=self.client_id))
+            print('Done loading random textures!')
+
+        tree_texture = self.random_textures[np.random.randint(len(self.random_textures))]
+        for tree_id in self.tree_model_metadata:
+            self.set_texture(tree_id, tree_texture)
+
+        link_id = self.robot.convert_link_name('cutter')
+        self.set_texture(self.robot.robot_id, self.random_textures[np.random.randint(len(self.random_textures))], link_id=link_id)
+
+        for other_id in [self.trellis_id, self.wall_id, self.side_wall_id, self.plane_id]:
+            self.set_texture(other_id, self.random_textures[np.random.randint(len(self.random_textures))])
+
+        return self.get_images(canonical=False)
+
+
+    def set_canonical(self):
+
+        if not self.canonical_textures:
+            print('Loading canonical textures...')
+            for file in filter(lambda x: x.startswith('canonical-') and x.endswith('.png'), os.listdir('textures')):
+                desc = file.replace('canonical-', '').replace('.png', '')
+                self.canonical_textures[desc] = pb.loadTexture(os.path.join('textures', file),
+                                                               physicsClientId=self.client_id)
+
+        link_id = self.robot.convert_link_name('cutter')
+        self.set_texture(self.robot.robot_id, self.canonical_textures['robot'], link_id=link_id)
+        self.set_texture(self.trellis_id, self.canonical_textures['wood'])
+        for tree_id in self.tree_model_metadata:
+            self.set_texture(tree_id, self.canonical_textures['tree'])
+        for other_id in [self.wall_id, self.side_wall_id, self.plane_id]:
+            self.set_texture(other_id, self.canonical_textures['wall'])
+
+        return self.get_images(canonical=True)
 
 def check_input_variance(model, obs, samples=10, output=False):
     rez = np.array([model.predict(obs, deterministic=False)[0] for _ in range(samples)])
