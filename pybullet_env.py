@@ -1,8 +1,17 @@
+import sys
+import os
+model_path = os.path.join(os.path.expanduser('~'), 'install', 'pytorch-CycleGAN-and-pix2pix')
+if os.path.exists(model_path):
+    sys.path.append(model_path)
+    import torch
+    from data.base_dataset import get_transform
+    from util.util import tensor2im
+
 import pybullet as pb
 import time
 import pybullet_data
 import numpy as np
-import os
+
 from helloworld import URDFRobot
 import random
 import pickle
@@ -36,13 +45,14 @@ def pose_to_tf(pos, quat):
     return tf
 
 class CutterEnvBase(gym.Env):
-    def __init__(self, width, height, grayscale=False, use_seg=False, use_depth=False, use_flow=False, use_last_frame=False,
+    def __init__(self, width, height, grayscale=False, use_net=False, use_seg=False, use_depth=False, use_flow=False, use_last_frame=False,
                  use_gui=False, img_buffer_size=0):
         super(CutterEnvBase, self).__init__()
 
         self.width = width
         self.height = height
         self.grayscale = grayscale
+        self.use_net = use_net
         self.use_seg = use_seg
         self.use_depth = use_depth
         self.use_flow = use_flow
@@ -59,6 +69,28 @@ class CutterEnvBase(gym.Env):
                                                            use_depth='_depth' if use_depth else '', flow='_flow' if use_flow else '',
                                                                           uselast='_uselastframe' if use_last_frame else '')
 
+        self.model = None
+        self.model_tf = None
+        if self.use_net:
+
+            import pickle
+            from options.test_options import TestOptions
+            from models import create_model
+            with open('default_options.pickle', 'rb') as fh:
+                opt = pickle.load(fh)
+            opt.checkpoints_dir = os.path.join(model_path, 'checkpoints')
+            opt.name = 'pruning2_pix2pix'
+            self.model = create_model(opt)
+            self.model.setup(opt)
+            self.model.eval()
+
+            self.model_tf = get_transform(opt)
+
+            # For testing, but also to deal with overhead of loading model into GPU
+            test_input = {'A': torch.rand(1,3,256,256), 'A_paths': ''}
+            self.model.set_input(test_input)
+            self.model.test()
+
         # For visualization
         self.image_buffer_index = 0
         self.image_buffer = None
@@ -68,10 +100,14 @@ class CutterEnvBase(gym.Env):
         if self.use_gui:
             plt.ion()
             self.fig = plt.figure()
-            self.img_ax = self.fig.add_subplot(121)
-            self.img = self.img_ax.imshow(np.zeros((height, width), dtype=np.uint8))
+            self.img_ax = self.fig.add_subplot(131)
+            self.img = self.img_ax.imshow(np.zeros((self.height, self.width), dtype=np.uint8))
 
-            self.action_ax = self.fig.add_subplot(122)
+            self.img_ax_2 = self.fig.add_subplot(132)
+            self.img_2 = self.img_ax_2.imshow(np.zeros((self.height, self.width), dtype=np.uint8))
+
+
+            self.action_ax = self.fig.add_subplot(133)
             self.action_ax.set_xlim(-1, 1)
             self.action_ax.set_ylim(-1, 1)
             self.arrow = None
@@ -85,6 +121,23 @@ class CutterEnvBase(gym.Env):
     def get_obs(self):
         # Grab the new image observation
         rgb_img, depth_img, seg_img = self.get_images()
+
+        if self.use_net:
+
+            if self.use_gui:
+                self.img_2.set_data(rgb_img)
+
+            img_tensor = self.model_tf(Image.fromarray(rgb_img))
+            img_input = {'A': img_tensor.view(-1, *img_tensor.shape) , 'A_paths': ''}
+            self.model.set_input(img_input)
+            self.model.test()
+            output = self.model.get_current_visuals()['fake']
+
+            if output.shape[-2] != (self.height, self.width):
+                output = torch.nn.functional.interpolate(output, size=(self.height, self.width))
+
+            rgb_img = tensor2im(output)
+
         if self.image_buffer is not None:
             self.image_buffer[self.image_buffer_index] = rgb_img
             self.image_buffer_index = (self.image_buffer_index + 1) % (self.image_buffer.shape[0])
@@ -161,9 +214,9 @@ class CutterEnv(CutterEnvBase):
     """Custom Environment that follows gym interface"""
     metadata = {'render.modes': ['human']}
 
-    def __init__(self, width, height, grayscale=False, use_seg=False, use_depth=False, use_flow=False, use_last_frame=False, max_vel=0.075, action_freq=24, max_elapsed_time=3.0,
+    def __init__(self, width, height, grayscale=False, use_net=False, use_seg=False, use_depth=False, use_flow=False, use_last_frame=False, max_vel=0.075, action_freq=24, max_elapsed_time=3.0,
                  min_reward_dist=0.10, difficulty=0.0, eval=False, use_gui=False, debug=False, img_buffer_size=0):
-        super(CutterEnv, self).__init__(width, height, grayscale=grayscale, use_seg=use_seg, use_depth=use_depth, use_flow=use_flow, use_last_frame=use_last_frame,
+        super(CutterEnv, self).__init__(width, height, grayscale=grayscale, use_net=use_net, use_seg=use_seg, use_depth=use_depth, use_flow=use_flow, use_last_frame=use_last_frame,
                                         use_gui=use_gui, img_buffer_size=img_buffer_size)
 
         # Configuration parameters
@@ -179,15 +232,13 @@ class CutterEnv(CutterEnvBase):
         self.accel_threshold = 0.50         # Vector magnitude where [X,Y] are in range [-1, 1]
         self.accel_penalty = 0.50           # For every unit accel exceeding the threshold, reduce base reward by given proportion
         self.frames_per_img = 8             # Corresponds to 30 Hz
-        self.pass_threshold = 0.015         # Experiment ends positively if Z-ax distance to target is less than threshold
-        self.fail_threshold = 0.02          # Experiment ends negatively if cutter passes Z-ax distance behind target
+        self.fail_threshold = 0.0           # Experiment ends negatively if cutter passes Z-ax distance behind target
 
         # State parameters
         self.target_pose = None             # What pose should the cutter end up in?
         self.target_tree = None             # Which tree model is in front?
         self.target_id = None               # Which of the side branches are we aiming at on the target tree?
         self.target_tf = np.identity(4)     # What is the next waypoint for the cutter?
-        self.in_mouth_counter = 0           # How many consecutive time units has the branch been in the cutter?
         self.approach_vec = None            # Unit vector pointing towards the target from the cutter start position
         self.approach_history = []          # Keeps track of best approach distances
         self.speed = max_vel
@@ -197,8 +248,9 @@ class CutterEnv(CutterEnvBase):
         self.mesh_points = {}
         self.last_command = np.zeros(2)
         self.lighting = None                # Location of light source
-        self.lighting_color = [1, 1, 1]
+        self.lighting_params = {}           # For feeding into getCameraImage (diffuse, color, etc.)
         self.contrast = None                # Contrast adjustment factor
+        self.accum_dist_reward = 0          # How much reward has been accumulated from distance closeness?
 
         # Simulation tools - Some are only for seg masks!
         # self.noise_buffer = PerlinNoiseBuffer(width, height, rectangle_size=30, buffer_size=50)
@@ -224,17 +276,22 @@ class CutterEnv(CutterEnvBase):
         self.proj_mat = pb.computeProjectionMatrixFOV(
             fov=42.0, aspect = width / height, nearVal=0.01,
             farVal=10.0)
-        self.robot.attach_ghost_body_from_file('robots/ur5e/collision/cutter-mouth-collision.stl',
+        # self.robot.attach_ghost_body_from_file('robots/ur5e/collision/cutter-mouth-collision.stl',
+        #                                        'mouth', 'cutpoint', rpy=[0, 0, 3.1416])
+        self.robot.attach_ghost_body_from_file('robots/ur5e/collision/cutter-mouth-collision-shrunk.stl',
                                                'mouth', 'cutpoint', rpy=[0, 0, 3.1416])
-        self.robot.attach_ghost_body_from_file('robots/ur5e/collision/cutter-failure-zone.stl',
+        self.robot.attach_ghost_body_from_file('robots/ur5e/collision/cutter-failure-zone-new.stl',
                                                'failure', 'cutpoint', rpy=[0, 0, 3.1416])
 
         # Create pose database
         self.poses = self.load_pose_database()
 
         # Load trellis
-        self.trellis_id = self.load_mesh(os.path.join('models', 'trellis-setup.obj'), col_file=os.path.join('models', 'trellis-setup-collision.obj'),
-                                         pos=[0, 2.0, 0], orientation=BASE_ROT)
+        self.trellis_frame_id = self.load_mesh(os.path.join('models', 'trellis-wood-frame.obj'),
+                                               col_file=os.path.join('models', 'trellis-setup-collision.obj'),
+                                               pos=[0, 2.0, 0], orientation=BASE_ROT)
+        self.trellis_base_id = self.load_mesh(os.path.join('models', 'trellis-base-plane.obj'), pos=[0, 2.0, 0], orientation=BASE_ROT)
+        self.trellis_wires_id = self.load_mesh(os.path.join('models', 'trellis-wires.obj'), pos=[0, 2.0, 0], orientation=BASE_ROT)
 
         # Load wall and wall textures
         wall_folder = os.path.join('models', 'wall_textures')
@@ -257,7 +314,9 @@ class CutterEnv(CutterEnvBase):
         # Load trees - Put them in background out of sight of the camera
 
         self.tree_model_metadata = {}
+        self.tree_textures = []
         tree_models_directory = os.path.join('models', 'trees')
+        tree_textures_directory = os.path.join('models', 'trees', 'textures')
         tree_model_files = [x for x in os.listdir(tree_models_directory) if x.endswith('.obj') and not '-' in x]
         if len(tree_model_files) < 3:
             tree_model_files = tree_model_files * 3
@@ -271,6 +330,10 @@ class CutterEnv(CutterEnvBase):
             with open(annotation_path, 'rb') as fh:
                 annotations = pickle.load(fh)
             self.tree_model_metadata[tree_id] = annotations
+
+        textures = [x for x in os.listdir(tree_textures_directory) if x.endswith('.png') and not x.endswith('N.png')]
+        for texture_file in textures:
+            self.tree_textures.append(pb.loadTexture(os.path.join(tree_textures_directory, texture_file), physicsClientId=self.client_id))
 
         # OTHER TEXTURES LIBRARY - LOADED IN THEIR RESPECTIVE FUNCTIONS
         self.canonical_textures = {}
@@ -321,7 +384,7 @@ class CutterEnv(CutterEnvBase):
             self.robot.set_control_target(ik)
             pb.stepSimulation(physicsClientId=self.client_id)
 
-            if i in img_update_frames:
+            if self.use_last_frame and i in img_update_frames:
                 self.get_obs()
 
             if realtime:
@@ -349,16 +412,12 @@ class CutterEnv(CutterEnvBase):
                                                          point_frame_tf=base_tf, plot_debug=False)
         self.failure = not self.in_mouth and \
                        (approach_dist < -self.fail_threshold or self.robot.query_ghost_body_collision('failure', tree_pts, point_frame_tf=base_tf, plot_debug=False))
-        if self.in_mouth:
-            self.in_mouth_counter += 1
-        else:
-            self.in_mouth_counter = 0
 
-        if self.debug and self.in_mouth_counter >= 3:
-            print('In-mouth consecutive 3 times, terminating...')
-
-        # Done conditions: Failure, time elapsed, cutter is in mouth and within threshold, mouth counter is sufficiently high
-        done =  self.failure or (self.elapsed_time >= self.max_elapsed_time) or (self.in_mouth and approach_dist < self.pass_threshold) or no_improvement or self.in_mouth_counter >= 3
+        # Done conditions: Success, failed, time elapsed, cutter is in mouth and within threshold
+        done =  self.in_mouth \
+                or self.failure \
+                or (self.elapsed_time >= self.max_elapsed_time) \
+                or no_improvement
         reward = self.get_reward(vel_command, done)
 
         self.last_command = vel_command
@@ -367,6 +426,17 @@ class CutterEnv(CutterEnvBase):
     def get_images(self, canonical=False):
         view_matrix = self.robot.get_link_kinematics('wrist_3_link-tool0_fixed_joint',
                                                      as_matrix=True) @ self.current_camera_tf
+
+        flags = {}
+        if not (canonical or self.use_seg):
+            flags['flags'] = pb.ER_NO_SEGMENTATION_MASK
+
+
+        params = self.lighting_params
+        params['shadow'] = True
+        if canonical:
+            params = {'lightColor': [1,1,1], 'shadow': False}
+
         _, _, rgb_img, raw_depth_img, raw_seg_img = pb.getCameraImage(
             width=self.width,
             height=self.height,
@@ -374,23 +444,30 @@ class CutterEnv(CutterEnvBase):
             projectionMatrix=self.proj_mat,
             renderer=pb.ER_TINY_RENDERER,
             lightDirection=[0, 0, 5] if canonical else self.lighting,
-            lightColor=[1, 1, 1] if canonical else self.lighting_color,
-            shadow=True,
-            physicsClientId=self.client_id
+            lightDistance=10,
+            physicsClientId=self.client_id,
+            **flags, **params
         )
 
         rgb_img = rgb_img[:, :, :3]
-        if not canonical:
-            pil_img = Image.fromarray(rgb_img, 'RGB')
-            enhancer = ImageEnhance.Contrast(pil_img)
-            rgb_img = np.asarray(enhancer.enhance(self.contrast))
+        # if not canonical:
+        #     pil_img = Image.fromarray(rgb_img, 'RGB')
+        #     enhancer = ImageEnhance.Contrast(pil_img)
+        #     rgb_img = np.asarray(enhancer.enhance(self.contrast))
 
         depth_img = None
         if self.use_depth:
             depth_img = raw_depth_img
             # depth_img = overlay_noise(raw_depth_img, *self.current_depth_noise, convert_to_uint8=True)
 
+
+        # By default, output a segmentation mask showing the tree mask
         seg_img = None
+        if canonical:
+            seg_img = np.zeros(raw_seg_img.shape, dtype=bool)
+            for tree_id in self.tree_model_metadata:
+                seg_img |= raw_seg_img == tree_id
+
         if self.use_seg:
             raise NotImplementedError("Segmentation logic needs to be reimplemented")
             tree_layer_raw = (raw_seg_img == self.tree.robot_id).astype(np.float64)
@@ -424,27 +501,27 @@ class CutterEnv(CutterEnvBase):
 
         if self.debug:
             if in_mouth:
-                print('[DEBUG] Branch is in mouth!')
+                print('[DEBUG] Branch is in mouth, success!')
             if failure:
                 print('[DEBUG] Branch has reached failure point!')
 
-        if failure:
-            reward = -(self.max_elapsed_time - self.elapsed_time)
-        else:
-            d = self.get_cutter_dist()
-            dist_proportion = max(1 - d / self.min_reward_dist, 0.0)
+        d = self.get_cutter_dist()
+        dist_proportion = max(1 - d / self.min_reward_dist, 0.0)
 
-            if done:
-                if not in_mouth:
-                    reward = -(self.max_elapsed_time - self.elapsed_time)
-                else:
-                    reward = (self.max_elapsed_time - self.elapsed_time) * dist_proportion
+        if done:
+            if in_mouth:
+                reward = (self.max_elapsed_time - self.elapsed_time) * dist_proportion
             else:
-                accel = np.linalg.norm(command - self.last_command)
-                accel_multiplier = 1.0 - max(0, accel - self.accel_threshold) * self.accel_penalty
+                reward = -self.max_elapsed_time - self.accum_dist_reward
 
-                ts = self.action_freq / 240.0
-                reward = dist_proportion * ts * (1.0 if in_mouth else 0.25) * accel_multiplier
+        else:
+            accel = np.linalg.norm(command - self.last_command)
+            accel_multiplier = 1.0 - max(0, accel - self.accel_threshold) * self.accel_penalty
+
+            ts = self.action_freq / 240.0
+            dist_based_reward = dist_proportion * ts * (1.0 if in_mouth else 0.25)
+            reward = dist_based_reward * accel_multiplier
+            self.accum_dist_reward += dist_based_reward
 
         if self.debug:
             print('Obtained reward: {:.3f}'.format(reward))
@@ -457,7 +534,7 @@ class CutterEnv(CutterEnvBase):
             print('Reset! (Elapsed time {:.2f}s)'.format(self.elapsed_time))
 
         self.elapsed_time = 0.0
-        self.in_mouth_counter = 0
+        self.accum_dist_reward = 0.0
         self.failure = False
         self.in_mouth = False
         self.speed = self.max_vel if self.eval else np.random.uniform(self.max_vel * 0.5, self.max_vel)
@@ -466,6 +543,7 @@ class CutterEnv(CutterEnvBase):
         self.last_command = np.zeros(2)
 
         # Modify the scenery
+        self.lighting_params = {}
         self.reset_trees()
         self.randomize()
 
@@ -545,6 +623,15 @@ class CutterEnv(CutterEnvBase):
 
         # Select one of the trees from the tree model metadata
         all_trees = list(self.tree_model_metadata)
+        use_same_texture = np.random.uniform() < 0.3
+        if use_same_texture:
+            random_texture = self.tree_textures[np.random.randint(len(self.tree_textures))]
+            for tree_id in all_trees:
+                self.set_texture(tree_id, random_texture)
+        else:
+            for tree_id in all_trees:
+                self.set_texture(tree_id, self.tree_textures[np.random.randint(len(self.tree_textures))])
+
         self.target_tree = all_trees[np.random.choice(len(all_trees))]
         all_trees.remove(self.target_tree)
         random.shuffle(all_trees)
@@ -573,7 +660,11 @@ class CutterEnv(CutterEnvBase):
         other_idx.remove(chosen_idx)
 
         trellis_loc = np.array([base_loc[0] - trellis_base_pos[chosen_idx], self.target_pose[1] + np.random.uniform(0, 0.02), trellis_height])
-        pb.resetBasePositionAndOrientation(bodyUniqueId=self.trellis_id, posObj=trellis_loc, ornObj=BASE_ROT, physicsClientId=self.client_id)
+        for trellis_id in [self.trellis_frame_id, self.trellis_wires_id]:
+            pb.resetBasePositionAndOrientation(bodyUniqueId=trellis_id, posObj=trellis_loc, ornObj=BASE_ROT, physicsClientId=self.client_id)
+
+        pb.resetBasePositionAndOrientation(bodyUniqueId=self.trellis_base_id, posObj=trellis_loc + np.random.uniform(-1, 1,size=3)* [0.05, 0.05, 0],
+                                           ornObj=BASE_ROT, physicsClientId=self.client_id)
 
         # Move walls and the other trees into position, and any excess trees off into the background
         for tree_id, leader_idx in zip(all_trees[:len(other_idx)], other_idx):
@@ -604,13 +695,13 @@ class CutterEnv(CutterEnvBase):
     def randomize_lighting_and_contrast(self, include_color=False):
         self.lighting = np.random.uniform(-1.0, 1.0, 3)
         self.lighting[2] = np.abs(self.lighting[2])
-        self.lighting *= np.random.uniform(8.0, 16.0) / np.linalg.norm(self.lighting)
+        self.lighting *= np.random.uniform(2.0, 10.0) / np.linalg.norm(self.lighting)
         self.contrast = np.random.uniform(0.5, 2.0)
         if include_color:
-            self.lighting_color = np.random.uniform(size=3)
-        else:
-            self.lighting_color = [1.0, 1.0, 1.0]
-
+            self.lighting_params['lightColor'] = np.random.uniform(size=3)
+            self.lighting_params['lightAmbientCoeff'] = np.random.uniform(0.25, 0.9)
+            self.lighting_params['lightDiffuseCoeff'] = np.random.uniform(0, 2)
+            self.lighting_params['lightSpecularCoeff'] = np.random.uniform(0, 0.5)
 
     def load_pose_database(self):
         db_file = 'pose_database.pickle'
@@ -643,14 +734,20 @@ class CutterEnv(CutterEnvBase):
                 self.random_textures.append(pb.loadTexture(os.path.join(texture_dir, file), physicsClientId=self.client_id))
             print('Done loading random textures!')
 
-        tree_texture = self.random_textures[np.random.randint(len(self.random_textures))]
-        for tree_id in self.tree_model_metadata:
-            self.set_texture(tree_id, tree_texture)
+
+        use_same_tree_texture = np.random.uniform() < 0.30
+        if use_same_tree_texture:
+            tree_texture = self.random_textures[np.random.randint(len(self.random_textures))]
+            for tree_id in self.tree_model_metadata:
+                self.set_texture(tree_id, tree_texture)
+        else:
+            for tree_id in self.tree_model_metadata:
+                self.set_texture(tree_id, self.random_textures[np.random.randint(len(self.random_textures))])
 
         link_id = self.robot.convert_link_name('cutter')
         self.set_texture(self.robot.robot_id, self.random_textures[np.random.randint(len(self.random_textures))], link_id=link_id)
 
-        for other_id in [self.trellis_id, self.wall_id, self.side_wall_id, self.plane_id]:
+        for other_id in [self.trellis_base_id, self.trellis_frame_id, self.trellis_wires_id, self.wall_id, self.side_wall_id, self.plane_id]:
             self.set_texture(other_id, self.random_textures[np.random.randint(len(self.random_textures))])
 
         return self.get_images(canonical=False)
@@ -667,7 +764,10 @@ class CutterEnv(CutterEnvBase):
 
         link_id = self.robot.convert_link_name('cutter')
         self.set_texture(self.robot.robot_id, self.canonical_textures['robot'], link_id=link_id)
-        self.set_texture(self.trellis_id, self.canonical_textures['wood'])
+        self.set_texture(self.trellis_frame_id, self.canonical_textures['wood'])
+        self.set_texture(self.trellis_wires_id, self.canonical_textures['wires'])
+        self.set_texture(self.trellis_base_id, self.canonical_textures['wall'])
+
         for tree_id in self.tree_model_metadata:
             self.set_texture(tree_id, self.canonical_textures['tree'])
         for other_id in [self.wall_id, self.side_wall_id, self.plane_id]:
@@ -689,13 +789,15 @@ if __name__ == '__main__':
     # action = 'eval'
     action = 'train'
     use_trained = True
+    difficulty = 0.6
     width = 424
     height = 240
     grayscale = False
+    use_net = True
     use_seg = False
     use_depth = False
     use_flow = False
-    use_last_frame = True
+    use_last_frame = False
     num_envs = 3
     record = False
     variance_debug = False
@@ -706,7 +808,7 @@ if __name__ == '__main__':
 
     if action == 'train':
         def make_env(monitor=False, with_gui=False, eval=False):
-            env = CutterEnv(width, height, grayscale=grayscale, use_seg=use_seg, use_depth=use_depth, use_flow=use_flow,
+            env = CutterEnv(width, height, grayscale=grayscale, use_net=use_net, use_seg=use_seg, use_depth=use_depth, use_flow=use_flow,
                              use_last_frame=use_last_frame, use_gui=with_gui, max_elapsed_time=1.5, max_vel=0.05, difficulty=0.0, debug=False,
                             eval=eval)
             if monitor:
@@ -719,13 +821,11 @@ if __name__ == '__main__':
         n_steps = 600 // num_envs
         batch_size = 60
 
-
         model = PPO("CnnPolicy", env, batch_size=batch_size, n_steps=n_steps, verbose=1, device='auto')
 
         print('Learning...')
-        # difficulties = [0.0, 0.2, 0.4, 0.6, 0.8, 1.0]
         difficulties = [0.4, 0.6, 0.8, 1.0]
-        steps_per_difficulty = 8040
+        steps_per_difficulty = 9000
         for difficulty in difficulties:
             difficulty_str = str(difficulty).replace('.', '_')
             model_file = f'best_model_{difficulty_str}.zip'
@@ -750,33 +850,40 @@ if __name__ == '__main__':
         timesteps, buffer_size = (150, 450) if record else (1000, 0)
 
         # env = CutterEnv(159, 90, use_seg=use_seg, use_depth=use_depth, use_gui=True, max_elapsed_time=2.5, max_vel=0.05, debug=True)
-        env = CutterEnv(width, height, grayscale=grayscale, use_seg=use_seg, use_depth=use_depth, use_flow=use_flow, use_last_frame=use_last_frame,
+        env = CutterEnv(width, height, grayscale=grayscale, use_net=use_net, use_seg=use_seg, use_depth=use_depth, use_flow=use_flow, use_last_frame=use_last_frame,
                         use_gui=True, max_elapsed_time=1.0, max_vel=0.05, debug=True, img_buffer_size=buffer_size,
-                        eval=True, difficulty=0.4)
+                        eval=True, difficulty=difficulty)
         model = PPO("CnnPolicy", env, verbose=1)
         # model_file = '{}.model'.format(env.model_name)
         if use_trained:
-            model_file = 'best_model_0_4.zip'
+            diff_str = str(difficulty).replace('.', '_')
+            model_file = 'best_model_{}.zip'.format(diff_str)
             if os.path.exists(model_file):
                 model = model.load(model_file)
                 print('Using best model!')
         obs = env.reset()
         all_dists = []
-        for i in range(timesteps):
-            if use_trained:
-                action, _states = model.predict(obs, deterministic=True)
-                if variance_debug:
-                    check_input_variance(model, obs, output=True)
-            else:
-                # action = env.action_space.sample()
-                action = np.array([1.0, 0.0])
+        action_hist = []
+        try:
+            for i in range(timesteps):
+                if use_trained:
+                    action, _states = model.predict(obs, deterministic=True)
+                    if variance_debug:
+                        check_input_variance(model, obs, output=True)
+                else:
+                    # action = env.action_space.sample()
+                    action = np.array([1.0, 0.0])
 
-            env.set_action(action)
-            obs, reward, done, info = env.step(action, realtime=True)
-            # env.render()
-            if done:
-                all_dists.append(env.get_cutter_dist())
-                obs = env.reset()
+                env.set_action(action)
+                action_hist.append(action)
+                obs, reward, done, info = env.step(action, realtime=True)
+                # env.render()
+                if done:
+                    all_dists.append(env.get_cutter_dist())
+                    obs = env.reset()
+        finally:
+            file_id = int(time.time())
+            np.save('data/hist_sim_{}.npy'.format(file_id), np.array(action_hist))
 
         if record:
             from matplotlib import animation

@@ -12,7 +12,7 @@ def convert_scene_to_trimesh(scene):
 
 if __name__ == "__main__":
 
-    MESH_POINT_DIST = 0.04
+    MESH_POINT_DIST = 0.03
     POINTS_PER_TARGET = 100
 
     tree_dir = os.path.join('models', 'trees')

@@ -23,9 +23,6 @@ def process_grayscale_image(img_array):
     new_array = (color_1 + unwrapped @ diff).reshape(*img_array.shape, 3).astype(np.uint8)
     return new_array
 
-
-
-
 def looks_grayscale(array, tolerance=2):
 
     if array.shape == 2:

@@ -1,6 +1,20 @@
 from pybullet_env import CutterEnv
 import os
-import PIL
+from PIL import Image
+import numpy as np
+from scipy.ndimage import gaussian_filter
+
+def blur(array, sigma):
+    return gaussian_filter(array, sigma=(sigma, sigma, 0))
+
+def convert_rgb_seg_to_output(rgb, seg):
+
+    hsv = np.array(Image.fromarray(rgb).convert(mode='HSV'))
+    seg_mask = 255 * seg
+    hsv[:,:,1] = seg_mask
+    return hsv
+
+
 
 if __name__ == '__main__':
 
@@ -24,12 +38,18 @@ if __name__ == '__main__':
         action = env.action_space.sample()
         obs, reward, done, info = env.step(action, realtime=False)
 
-        random_img = env.set_random()[0]
-        canonical_img = env.set_canonical()[0]
+        random_img, _, _ = env.set_random()
+        sigma = np.random.uniform(0.0, 1.5)
 
-        PIL.Image.fromarray(random_img).save(os.path.join(output_dir, 'randomized', f'{i}.png'))
-        PIL.Image.fromarray(canonical_img).save(os.path.join(output_dir, 'canonical', f'{i}.png'))
+        raw_canonical_img, _, canonical_seg = env.set_canonical()
+        canonical_img = convert_rgb_seg_to_output(raw_canonical_img, canonical_seg)
+        random_img = blur(random_img, sigma)
+
+        Image.fromarray(random_img).save(os.path.join(output_dir, 'randomized', f'{i}.png'))
+        Image.fromarray(canonical_img).save(os.path.join(output_dir, 'canonical', f'{i}.png'))
 
         if done:
             all_dists.append(env.get_cutter_dist())
             obs = env.reset()
+
+        print('{} / {}'.format(i+1, timesteps))
