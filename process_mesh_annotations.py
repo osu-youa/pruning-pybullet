@@ -53,7 +53,11 @@ if __name__ == "__main__":
             while len(points_to_concat) < POINTS_PER_TARGET:
                 total_points = len(points_to_concat)
                 remaining = POINTS_PER_TARGET - total_points
-                candidates = np.random.uniform(-MESH_POINT_DIST, MESH_POINT_DIST, size=(POINTS_PER_TARGET * 10, 3)) + position
+
+                # HACK to encourage closer points
+                candidates_a = np.random.uniform(-MESH_POINT_DIST / 2, MESH_POINT_DIST / 2, size=(POINTS_PER_TARGET, 3)) + position
+                candidates_b = np.random.uniform(-MESH_POINT_DIST, MESH_POINT_DIST, size=(POINTS_PER_TARGET, 3)) + position
+                candidates = np.concatenate([candidates_a, candidates_b])
                 contained_points = collision_query.signed_distance(candidates) > 0
                 candidates = candidates[contained_points]
 

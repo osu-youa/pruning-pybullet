@@ -215,7 +215,7 @@ class CutterEnv(CutterEnvBase):
     metadata = {'render.modes': ['human']}
 
     def __init__(self, width, height, grayscale=False, use_net=False, use_seg=False, use_depth=False, use_flow=False, use_last_frame=False, max_vel=0.075, action_freq=24, max_elapsed_time=3.0,
-                 min_reward_dist=0.10, difficulty=0.0, eval=False, use_gui=False, debug=False, img_buffer_size=0):
+                 min_reward_dist=0.10, difficulty=0.0, eval=False, eval_count=None, use_gui=False, debug=False, img_buffer_size=0):
         super(CutterEnv, self).__init__(width, height, grayscale=grayscale, use_net=use_net, use_seg=use_seg, use_depth=use_depth, use_flow=use_flow, use_last_frame=use_last_frame,
                                         use_gui=use_gui, img_buffer_size=img_buffer_size)
 
@@ -223,6 +223,7 @@ class CutterEnv(CutterEnvBase):
         self.debug = debug
         self.difficulty = difficulty
         self.eval = eval
+        self.eval_count = eval_count
         self.action_freq = action_freq
         self.max_elapsed_time = max_elapsed_time
         self.min_reward_dist = min_reward_dist
@@ -251,6 +252,8 @@ class CutterEnv(CutterEnvBase):
         self.lighting_params = {}           # For feeding into getCameraImage (diffuse, color, etc.)
         self.contrast = None                # Contrast adjustment factor
         self.accum_dist_reward = 0          # How much reward has been accumulated from distance closeness?
+
+        self.eval_counter = 0               # [EVAL only] After the specified number of evaluations, reset the Numpy random seed
 
         # Simulation tools - Some are only for seg masks!
         # self.noise_buffer = PerlinNoiseBuffer(width, height, rectangle_size=30, buffer_size=50)
@@ -370,8 +373,8 @@ class CutterEnv(CutterEnvBase):
 
         step = self.action_freq * self.speed / 240
         delta = np.array([horizontal * step, vertical * step, step, 1.0], dtype=np.float32)
-        prev_target_pos = self.target_tf[:3,3]
-        new_target_pos = (self.target_tf @ delta)[:3]
+        prev_target_pos = self.target_tf[:3,3].copy()
+        new_target_pos = (self.target_tf @ delta)[:3].copy()
         diff = new_target_pos - prev_target_pos
 
         # Move the arm in the environment
@@ -512,7 +515,7 @@ class CutterEnv(CutterEnvBase):
             if in_mouth:
                 reward = (self.max_elapsed_time - self.elapsed_time) * dist_proportion
             else:
-                reward = -self.max_elapsed_time - self.accum_dist_reward
+                reward = -self.max_elapsed_time
 
         else:
             accel = np.linalg.norm(command - self.last_command)
@@ -532,6 +535,10 @@ class CutterEnv(CutterEnvBase):
 
         if self.elapsed_time:
             print('Reset! (Elapsed time {:.2f}s)'.format(self.elapsed_time))
+
+        if self.eval and self.eval_count is not None:
+            self.eval_counter = (self.eval_counter + 1) % self.eval_count
+            np.random.seed(self.eval_counter)
 
         self.elapsed_time = 0.0
         self.accum_dist_reward = 0.0
@@ -580,16 +587,14 @@ class CutterEnv(CutterEnvBase):
         hard_dev = 0.03
 
         dist_center = easy_dist + (hard_dist - easy_dist) * self.difficulty
-        dev = easy_dev + (hard_dev - easy_dev) * self.difficulty
-        if self.eval:
-            dev = dev / 3.0
+        dev = 0 if self.eval else easy_dev + (hard_dev - easy_dev) * self.difficulty
         dist_bounds = (dist_center - dev, dist_center + dev)
 
         easy_offset = 0.01
-        hard_offset = 0.075
+        hard_offset = 0.05
         offset = easy_offset + (hard_offset - easy_offset) * self.difficulty
         if self.eval:
-            offset = offset / 3.0
+            offset = offset * 0.75
         offset_bounds = (-offset, offset)
 
         # Convert to world pose and then solve for the IKs
@@ -789,7 +794,7 @@ if __name__ == '__main__':
     # action = 'eval'
     action = 'train'
     use_trained = True
-    difficulty = 0.6
+    difficulty = 0.0
     width = 424
     height = 240
     grayscale = False
@@ -801,6 +806,7 @@ if __name__ == '__main__':
     num_envs = 3
     record = False
     variance_debug = False
+    train_eval_count = 12
 
     model_name = 'model_{w}_{h}{g}{s}{d}{f}{l}.zip'.format(w=width, h=height, g='_grayscale' if grayscale else '',
                                                        s='_seg' if use_seg else '', d='_depth' if use_depth else '',
@@ -809,14 +815,14 @@ if __name__ == '__main__':
     if action == 'train':
         def make_env(monitor=False, with_gui=False, eval=False):
             env = CutterEnv(width, height, grayscale=grayscale, use_net=use_net, use_seg=use_seg, use_depth=use_depth, use_flow=use_flow,
-                             use_last_frame=use_last_frame, use_gui=with_gui, max_elapsed_time=1.5, max_vel=0.05, difficulty=0.0, debug=False,
+                             use_last_frame=use_last_frame, use_gui=with_gui, max_elapsed_time=2.5, max_vel=0.10, difficulty=0.0, debug=False,
                             eval=eval)
             if monitor:
                 env = Monitor(env)
             return env
 
         env = VecTransposeImage(SubprocVecEnv([make_env] * num_envs))
-        eval_env = (VecTransposeImage(DummyVecEnv([partial(make_env, monitor=True, eval=True)])))
+        eval_env = (VecTransposeImage(DummyVecEnv([partial(make_env, monitor=True, eval=True, eval_count=train_eval_count)])))
 
         n_steps = 600 // num_envs
         batch_size = 60
@@ -824,8 +830,8 @@ if __name__ == '__main__':
         model = PPO("CnnPolicy", env, batch_size=batch_size, n_steps=n_steps, verbose=1, device='auto')
 
         print('Learning...')
-        difficulties = [0.4, 0.6, 0.8, 1.0]
-        steps_per_difficulty = 9000
+        difficulties = [0.0, 0.25, 0.5, 0.75, 1.0]
+        steps_per_difficulty = 15000
         for difficulty in difficulties:
             difficulty_str = str(difficulty).replace('.', '_')
             model_file = f'best_model_{difficulty_str}.zip'
@@ -836,7 +842,7 @@ if __name__ == '__main__':
                 eval_env.env_method('update_difficulty', difficulty)
 
                 eval_callback = EvalCallback(eval_env, best_model_save_path='./', log_path='./', eval_freq=n_steps,
-                                             n_eval_episodes=12,
+                                             n_eval_episodes=train_eval_count,
                                              deterministic=True, render=False)
                 model.learn(total_timesteps=steps_per_difficulty, callback=eval_callback)
                 os.rename('evaluations.npz', f'evaluations_{difficulty_str}.npz')
@@ -851,8 +857,8 @@ if __name__ == '__main__':
 
         # env = CutterEnv(159, 90, use_seg=use_seg, use_depth=use_depth, use_gui=True, max_elapsed_time=2.5, max_vel=0.05, debug=True)
         env = CutterEnv(width, height, grayscale=grayscale, use_net=use_net, use_seg=use_seg, use_depth=use_depth, use_flow=use_flow, use_last_frame=use_last_frame,
-                        use_gui=True, max_elapsed_time=1.0, max_vel=0.05, debug=True, img_buffer_size=buffer_size,
-                        eval=True, difficulty=difficulty)
+                        use_gui=True, max_elapsed_time=2.5, max_vel=0.10, debug=True, img_buffer_size=buffer_size,
+                        eval=True, eval_count=None, difficulty=difficulty)
         model = PPO("CnnPolicy", env, verbose=1)
         # model_file = '{}.model'.format(env.model_name)
         if use_trained:
