@@ -813,10 +813,10 @@ if __name__ == '__main__':
                                                        f='_flow' if use_flow else '', l='_uselast' if use_last_frame else '')
 
     if action == 'train':
-        def make_env(monitor=False, with_gui=False, eval=False):
+        def make_env(monitor=False, with_gui=False, eval=False, eval_count=None):
             env = CutterEnv(width, height, grayscale=grayscale, use_net=use_net, use_seg=use_seg, use_depth=use_depth, use_flow=use_flow,
                              use_last_frame=use_last_frame, use_gui=with_gui, max_elapsed_time=2.5, max_vel=0.10, difficulty=0.0, debug=False,
-                            eval=eval)
+                            eval=eval, eval_count=eval_count)
             if monitor:
                 env = Monitor(env)
             return env
