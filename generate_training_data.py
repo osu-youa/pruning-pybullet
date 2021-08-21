@@ -27,7 +27,17 @@ if __name__ == '__main__':
     use_last_frame = True
     output_dir = os.path.join(os.path.expanduser('~'), 'Documents', 'TrainingImages')
 
-    timesteps = 10000
+    import sys
+    args = sys.argv[1:]
+
+    timesteps = 5000
+    file_pref = ''
+
+    if len(args) >= 1:
+        timesteps = int(args[0])
+
+    if len(args) >= 2:
+        file_pref = '{}_'.format(args[1])
 
     env = CutterEnv(width, height, grayscale=grayscale, use_seg=use_seg, use_depth=use_depth, use_flow=use_flow,
                     use_last_frame=use_last_frame, use_gui=False, max_elapsed_time=1.0, max_vel=0.05, debug=True,
@@ -45,8 +55,8 @@ if __name__ == '__main__':
         canonical_img = convert_rgb_seg_to_output(raw_canonical_img, canonical_seg)
         random_img = blur(random_img, sigma)
 
-        Image.fromarray(random_img).save(os.path.join(output_dir, 'randomized', f'{i}.png'))
-        Image.fromarray(canonical_img).save(os.path.join(output_dir, 'canonical', f'{i}.png'))
+        Image.fromarray(random_img).save(os.path.join(output_dir, 'randomized', f'{file_pref}{i}.png'))
+        Image.fromarray(canonical_img).save(os.path.join(output_dir, 'canonical', f'{file_pref}{i}.png'))
 
         if done:
             all_dists.append(env.get_cutter_dist())
