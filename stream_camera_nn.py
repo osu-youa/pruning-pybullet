@@ -124,7 +124,7 @@ if __name__ == '__main__':
                             use_flow=use_flow, use_last_frame=use_last_frame, use_gui=True)
         model = PPO("CnnPolicy", env, verbose=1)
         # model_file = '{}.model'.format(env.model_name)
-        model_file = 'best_model_0_6.zip'
+        model_file = 'best_model_0_5.zip'
         if os.path.exists(model_file):
             model = model.load(model_file)
         else:
@@ -145,7 +145,7 @@ if __name__ == '__main__':
                     env.set_action(action)
                     action_hist.append(action)
                     print(action)
-                    env.set_title('Frame {}'.format(i))
+                    env.set_title('{}: Frame {}'.format(file_id, i))
 
                     if save_img:
                         obs = obs[:,:,:3]
@@ -154,7 +154,7 @@ if __name__ == '__main__':
                         im.save(save_path)
                         time.sleep(0.5)
             finally:
-                # np.save('data/hist_{}.npy'.format(int(file_id)), np.array(action_hist))
+                np.save('data/hist_{}.npy'.format(int(file_id)), np.array(action_hist))
                 print('Saved!')
 
 
@@ -186,23 +186,26 @@ if __name__ == '__main__':
                 print('Waiting for connection')
                 connection, client_address = sock.accept()
                 print('Connection accepted!')
+                file_id = int(time.time())
 
                 action_history = []
+
+                env.set_title('Trial {}'.format(file_id))
 
                 try:
                     while True:
                         obs = env.get_obs()
                         action = model.predict(obs, deterministic=True)[0]
                         env.set_action(action)
+
                         action_history.append(action)
                         # array = np.array([0, 0, -0.01])
-                        # TEMPORARILY APPLY NEGATIVE DUE TO FRAME ISSUE
-                        array = np.array([-action[0], -action[1], 1]) * forward_speed
+                        array = np.array([action[0], action[1], 1]) * forward_speed
                         connection.sendall(array.tostring())
                 finally:
                     connection.close()
-                    ts = time.time()
-                    np.save('data/hist_real_{}.npy'.format(int(ts)), np.array(action_history))
+
+                    np.save('data/hist_real_{}.npy'.format(file_id), np.array(action_history))
                     print('Connection terminated, waiting for new connection...')
         else:
             raise NotImplementedError

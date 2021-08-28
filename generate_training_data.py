@@ -47,6 +47,8 @@ if __name__ == '__main__':
     for i in range(timesteps):
         action = env.action_space.sample()
         obs, reward, done, info = env.step(action, realtime=False)
+        env.randomize_camera()
+
 
         random_img, _, _ = env.set_random()
         sigma = np.random.uniform(0.0, 1.5)

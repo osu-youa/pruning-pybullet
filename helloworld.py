@@ -200,12 +200,13 @@ class URDFRobot:
 
         self.ghost_body_tfs[name] = (joint_attachment, tf)
 
-        mins = mesh.vertices.min(axis=0)
-        maxs = mesh.vertices.max(axis=0)
-        rand = mins + np.random.uniform(0, 1, size=(1000, 3)) * (maxs - mins)
-        dists = self.ghost_bodies[name][1].signed_distance(rand)
-        to_show = rand[dists > 0]
-        self.debug_test_points = to_show
+        if name == 'mouth':
+            mins = mesh.vertices.min(axis=0)
+            maxs = mesh.vertices.max(axis=0)
+            rand = mins + np.random.uniform(0, 1, size=(1000, 3)) * (maxs - mins)
+            dists = self.ghost_bodies[name][1].signed_distance(rand)
+            to_show = rand[dists > 0]
+            self.debug_test_points = to_show
 
     def query_ghost_body_collision(self, name, points, point_frame_tf=None, plot_debug=False):
         tf = (self.get_link_kinematics(self.ghost_body_tfs[name][0], as_matrix=True) @ self.ghost_body_tfs[name][1])

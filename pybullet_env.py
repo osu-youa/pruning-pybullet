@@ -79,10 +79,10 @@ class CutterEnvBase(gym.Env):
             with open('default_options.pickle', 'rb') as fh:
                 opt = pickle.load(fh)
             opt.checkpoints_dir = os.path.join(model_path, 'checkpoints')
-            opt.name = 'pruning2_pix2pix'
+            opt.name = 'pruning4_pix2pix'
             self.model = create_model(opt)
             self.model.setup(opt)
-            self.model.eval()
+            # self.model.eval()
 
             self.model_tf = get_transform(opt)
 
@@ -270,7 +270,10 @@ class CutterEnv(CutterEnvBase):
         plane_texture_root = os.path.join('textures', 'floor')
         self.plane_textures = [pb.loadTexture(os.path.join(plane_texture_root, file), physicsClientId=self.client_id) for file in os.listdir(plane_texture_root)]
 
-        arm_location = os.path.join('robots', 'ur5e_cutter_new_calibrated_precise.urdf')
+        # robot_name = 'ur5e_cutter_new_calibrated_precise.urdf'
+        self.robot_name = 'ur5e_cutter_new_calibrated_precise_level.urdf'
+
+        arm_location = os.path.join('robots', self.robot_name)
         self.home_joints = [-1.5708, -2.2689, -1.3963, 0.52360, 1.5708, 3.14159]
         self.robot = URDFRobot(arm_location, [0, 0, 0.02], [0, 0, 0, 1], flags=pb.URDF_USE_MATERIAL_COLORS_FROM_MTL,
                                physicsClientId=self.client_id)
@@ -282,9 +285,9 @@ class CutterEnv(CutterEnvBase):
         # self.robot.attach_ghost_body_from_file('robots/ur5e/collision/cutter-mouth-collision.stl',
         #                                        'mouth', 'cutpoint', rpy=[0, 0, 3.1416])
         self.robot.attach_ghost_body_from_file('robots/ur5e/collision/cutter-mouth-collision-shrunk.stl',
-                                               'mouth', 'cutpoint', rpy=[0, 0, 3.1416])
+                                               'mouth', 'cutpoint', rpy=[0, 0, 0])
         self.robot.attach_ghost_body_from_file('robots/ur5e/collision/cutter-failure-zone-new.stl',
-                                               'failure', 'cutpoint', rpy=[0, 0, 3.1416])
+                                               'failure', 'cutpoint', rpy=[0, 0, 0])
 
         # Create pose database
         self.poses = self.load_pose_database()
@@ -539,6 +542,11 @@ class CutterEnv(CutterEnvBase):
         if self.eval and self.eval_count is not None:
             self.eval_counter = (self.eval_counter + 1) % self.eval_count
             np.random.seed(self.eval_counter)
+            print('Using seed {}'.format(self.eval_counter))
+        # else:
+        #     new_seed = np.random.randint(65536)
+        #     np.random.seed(new_seed)
+        #     print('Using seed {}'.format(new_seed))
 
         self.elapsed_time = 0.0
         self.accum_dist_reward = 0.0
@@ -552,39 +560,20 @@ class CutterEnv(CutterEnvBase):
         # Modify the scenery
         self.lighting_params = {}
         self.reset_trees()
-        self.randomize()
+        self.randomize_scenery()
 
         # Reset the image noise parameters
 
         self.last_grayscale = None
-        # self.current_depth_noise = (np.random.uniform(0, self.max_depth_sigma), self.noise_buffer.get_random(), np.random.uniform(0, self.max_noise_alpha))
-        # self.current_tree_noise = (np.random.uniform(0, self.max_tree_sigma), self.noise_buffer.get_random(), np.random.uniform(0, self.max_noise_alpha))
-
-        # Initialize an ideal camera transform, but with noise added to the parameters
-        tool_tf = self.robot.get_link_kinematics('wrist_3_link-tool0_fixed_joint', as_matrix=True)
-        deg_noise = 0 if self.eval else (0.5 + 4.5 * self.difficulty)
-
-        pan = np.radians(np.random.uniform(-45-deg_noise, -45+deg_noise))
-        tilt = np.radians(np.random.uniform(45-deg_noise, 45+deg_noise))
-        ideal_view_matrix = camera_util.get_view_matrix(pan, tilt, base_tf=tool_tf)
-        ideal_tool_camera_tf = np.linalg.inv(tool_tf) @ np.linalg.inv(ideal_view_matrix)
-
-        # Perturb the tool-camera TF
-        xyz_noise = np.random.uniform(-0.0025, 0.0025, size=3)
-        rpy_noise = np.random.uniform(-np.radians(2.5), np.radians(2.5), size=3)
-        noise_tf = np.identity(4)
-        noise_tf[:3,3] = xyz_noise
-        noise_tf[:3,:3] = Rotation.from_euler('xyz', rpy_noise, degrees=False).as_matrix()
-        self.current_camera_tf = ideal_tool_camera_tf @ noise_tf
 
         # From the selected target on the tree (computed in reset_trees()), figure out the offset for the cutters
         # The offset has a schedule where at the lowest difficulty, the cutters start out right in front of the
         # target, and gradually move back as the difficulty increases
 
         easy_dist = -0.06
-        hard_dist = -0.15
+        hard_dist = -0.175
         easy_dev = 0.005
-        hard_dev = 0.03
+        hard_dev = 0.025
 
         dist_center = easy_dist + (hard_dist - easy_dist) * self.difficulty
         dev = 0 if self.eval else easy_dev + (hard_dev - easy_dev) * self.difficulty
@@ -612,21 +601,41 @@ class CutterEnv(CutterEnvBase):
                                         retries=3)
 
         self.target_tf = self.robot.get_link_kinematics('cutpoint', as_matrix=True)
+        self.randomize_camera()
 
         return self.get_obs()
 
     def render(self, mode='human', close=False):
         print('Last dist: {:.3f}'.format(self.get_cutter_dist()))
 
-    def reset_trees(self):
 
-        # Determine the spacing for the wall
-        wall_range = (0.5, 1)
-        side_wall_range = (2, 10)
-        wall_offset = np.random.uniform(*wall_range)
-        side_wall_offset = np.random.uniform(*side_wall_range)
+    def randomize_camera(self):
+        tool_tf = self.robot.get_link_kinematics('wrist_3_link-tool0_fixed_joint', as_matrix=True)
+        deg_noise = 0 if self.eval else (0.5 + 4.5 * self.difficulty)
 
-        # Select one of the trees from the tree model metadata
+        pan_offset_pairs = [
+            (-30, np.array([0,0,0])),
+            (-22.5, np.array([-0.0338, 0, -0.025])),
+            (-15, np.array([-0.0676, 0, -0.05]))
+        ]
+
+        base_pan, base_offset = pan_offset_pairs[2]
+        # base_pan, base_offset = pan_offset_pairs[np.random.choice(len(pan_offset_pairs))]
+        xyz_offset = base_offset + np.random.uniform(-1, 1, 3) * np.array([0.01, 0.01, 0.02])
+
+        pan = np.radians(np.random.uniform(base_pan - deg_noise, base_pan + deg_noise))
+        ideal_view_matrix = camera_util.get_view_matrix(pan, xyz_offset, base_tf=tool_tf)
+        ideal_tool_camera_tf = np.linalg.inv(tool_tf) @ np.linalg.inv(ideal_view_matrix)
+
+        # Perturb the tool-camera TF
+        xyz_noise = np.random.uniform(-0.0025, 0.0025, size=3)
+        rpy_noise = np.random.uniform(-np.radians(2.5), np.radians(2.5), size=3)
+        noise_tf = np.identity(4)
+        noise_tf[:3, 3] = xyz_noise
+        noise_tf[:3, :3] = Rotation.from_euler('xyz', rpy_noise, degrees=False).as_matrix()
+        self.current_camera_tf = ideal_tool_camera_tf @ noise_tf
+
+    def randomize_tree_textures(self):
         all_trees = list(self.tree_model_metadata)
         use_same_texture = np.random.uniform() < 0.3
         if use_same_texture:
@@ -637,6 +646,17 @@ class CutterEnv(CutterEnvBase):
             for tree_id in all_trees:
                 self.set_texture(tree_id, self.tree_textures[np.random.randint(len(self.tree_textures))])
 
+    def reset_trees(self):
+
+        # Determine the spacing for the wall
+        wall_range = (0.5, 1)
+        side_wall_range = (2, 10)
+        wall_offset = np.random.uniform(*wall_range)
+        side_wall_offset = np.random.uniform(*side_wall_range)
+
+        # Select one of the trees from the tree model metadata
+        self.randomize_tree_textures()
+        all_trees = list(self.tree_model_metadata)
         self.target_tree = all_trees[np.random.choice(len(all_trees))]
         all_trees.remove(self.target_tree)
         random.shuffle(all_trees)
@@ -685,7 +705,7 @@ class CutterEnv(CutterEnvBase):
         pb.resetBasePositionAndOrientation(bodyUniqueId=self.side_wall_id, posObj=[side_wall_offset, 0, 7.5], ornObj=[0,0,0,1],
                                            physicsClientId=self.client_id)
 
-    def randomize(self):
+    def randomize_scenery(self):
         # Resets ground and wall texture
         pb.changeVisualShape(objectUniqueId=self.plane_id, linkIndex=-1, textureUniqueId=self.plane_textures[np.random.choice(len(self.plane_textures))],
                              physicsClientId=self.client_id)
@@ -709,7 +729,7 @@ class CutterEnv(CutterEnvBase):
             self.lighting_params['lightSpecularCoeff'] = np.random.uniform(0, 0.5)
 
     def load_pose_database(self):
-        db_file = 'pose_database.pickle'
+        db_file = 'pose_database_{}.pickle'.format(self.robot_name)
         try:
             with open(db_file, 'rb') as fh:
                 return pickle.load(fh)
@@ -791,10 +811,12 @@ def check_input_variance(model, obs, samples=10, output=False):
 
 if __name__ == '__main__':
 
-    # action = 'eval'
-    action = 'train'
+    action = 'eval'
+    # action = 'train'
     use_trained = True
-    difficulty = 0.0
+    difficulty = 1.0
+    model_difficulty = 0.5
+    # model_difficulty = difficulty
     width = 424
     height = 240
     grayscale = False
@@ -832,7 +854,7 @@ if __name__ == '__main__':
         print('Learning...')
         difficulties = [0.0, 0.25, 0.5, 0.75, 1.0]
         steps_per_difficulty = 15000
-        for difficulty in difficulties:
+        for i, difficulty in enumerate(difficulties):
             difficulty_str = str(difficulty).replace('.', '_')
             model_file = f'best_model_{difficulty_str}.zip'
             if not os.path.exists(model_file):
@@ -862,7 +884,7 @@ if __name__ == '__main__':
         model = PPO("CnnPolicy", env, verbose=1)
         # model_file = '{}.model'.format(env.model_name)
         if use_trained:
-            diff_str = str(difficulty).replace('.', '_')
+            diff_str = str(model_difficulty).replace('.', '_')
             model_file = 'best_model_{}.zip'.format(diff_str)
             if os.path.exists(model_file):
                 model = model.load(model_file)
