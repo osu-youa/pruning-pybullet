@@ -11,9 +11,10 @@ from PIL import Image
 
 class RealCutterEnv(CutterEnvBase):
     def __init__(self, width, height, grayscale=False, use_net=False, use_seg=False, use_depth=False, use_flow=False, use_last_frame=False,
-                 use_gui=False):
+                 use_gui=False, crop=None, downscale=None):
         super(RealCutterEnv, self).__init__(width, height, grayscale=grayscale, use_net=use_net, use_seg=use_seg, use_depth=use_depth,
-                                            use_flow=use_flow, use_last_frame=use_last_frame, use_gui=use_gui)
+                                            use_flow=use_flow, use_last_frame=use_last_frame, use_gui=use_gui, crop=crop,
+                                            downscale=downscale)
 
         # Setup the camera
         self.pipe = rs.pipeline()
@@ -104,6 +105,8 @@ if __name__ == '__main__':
     use_depth = False
     use_flow = False
     use_last_frame = False
+    crop = (120, 60)
+    downscale = 2
 
     # # TESTING
     # img_src = 'images'
@@ -121,14 +124,14 @@ if __name__ == '__main__':
 
     try:
         env = RealCutterEnv(width, height, grayscale=grayscale, use_net=use_net, use_seg=use_seg, use_depth=use_depth,
-                            use_flow=use_flow, use_last_frame=use_last_frame, use_gui=True)
+                            use_flow=use_flow, use_last_frame=use_last_frame, use_gui=True, crop=crop, downscale=downscale)
         model = PPO("CnnPolicy", env, verbose=1)
         # model_file = '{}.model'.format(env.model_name)
-        model_file = 'best_model_0_5.zip'
-        if os.path.exists(model_file):
-            model = model.load(model_file)
-        else:
-            raise Exception()
+        # model_file = 'best_model_0_5.zip'
+        # if os.path.exists(model_file):
+        #     model = model.load(model_file)
+        # else:
+        #     raise Exception()
 
 
         if action == 'eval':

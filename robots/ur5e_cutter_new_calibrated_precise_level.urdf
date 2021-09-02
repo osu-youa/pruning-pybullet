@@ -364,7 +364,7 @@
     <visual>
       <origin rpy="0 0 0" xyz="0 0 0.0"/>
       <geometry>
-        <mesh filename="ur5e/visual/cutter_wooden_final.obj" scale="1.0 1.0 1.0 "/>
+        <mesh filename="ur5e/visual/cutter_top_mount.obj" scale="1.0 1.0 1.0 "/>
       </geometry>
       <material name="LightGrey" />
     </visual>
@@ -372,7 +372,7 @@
      <collision>
       <origin rpy="0 0 0" xyz="0 0 0"/>
       <geometry>
-        <mesh filename="ur5e/collision/cutter_wooden_final.obj" scale="1.0 1.0 1.0"/>
+        <mesh filename="ur5e/collision/cutter_top_mount.obj" scale="1.0 1.0 1.0"/>
       </geometry>
     </collision>
 
@@ -402,7 +402,7 @@
   <joint name="endpoint" type="fixed">
 <!--    <origin rpy="0 0 0" xyz="0 0.09721 0.24210"/>  &lt;!&ndash; Left down out &ndash;&gt;-->
 <!--    <origin rpy="0 0 0" xyz="-0.00425 0.08971 0.24210"/> &lt;!&ndash;USE THIS ONE IF THE IK FOR BELOW DOESNT DO BETTER&ndash;&gt;-->
-    <origin rpy="0 0 0" xyz="-0.063175 0 0.20364"/>
+    <origin rpy="0 0 0" xyz="-0.063175 0 0.12864"/>
 <!--    <origin rpy="0 0 3.14159" xyz="-0.09425 -0.00511 0.09707"/>-->
 
     <axis xyz="0 0 1"/>

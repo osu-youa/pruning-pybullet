@@ -12,8 +12,8 @@ def convert_scene_to_trimesh(scene):
 
 if __name__ == "__main__":
 
-    MESH_POINT_DIST = 0.03
-    POINTS_PER_TARGET = 100
+    MESH_POINT_DIST = 0.02
+    POINTS_PER_TARGET = 150
 
     tree_dir = os.path.join('models', 'trees')
     files = [x for x in os.listdir(tree_dir) if x.endswith('.obj') and '-' not in x]

@@ -46,7 +46,7 @@ def pose_to_tf(pos, quat):
 
 class CutterEnvBase(gym.Env):
     def __init__(self, width, height, grayscale=False, use_net=False, use_seg=False, use_depth=False, use_flow=False, use_last_frame=False,
-                 use_gui=False, img_buffer_size=0):
+                 use_gui=False, use_plot_gui=True, crop=None, downscale = None, img_buffer_size=0):
         super(CutterEnvBase, self).__init__()
 
         self.width = width
@@ -58,13 +58,32 @@ class CutterEnvBase(gym.Env):
         self.use_flow = use_flow
         self.use_last_frame = use_last_frame
         self.use_gui = use_gui
+        self.use_plot_gui = use_plot_gui
+        self.crop = crop
+        self.downscale = downscale
 
         self.last_grayscale = None
 
         # Initialize gym parameters
         num_channels = (2 if use_seg else (1 if grayscale else 3)) + (1 if use_depth else 0) + (1 if use_flow else 0) + (1 if use_last_frame else 0)
+        final_shape = (height, width, num_channels)
+        if self.crop is not None:
+            if isinstance(self.crop[0], int):
+                width = self.crop[0] * 2
+                height = self.crop[1] * 2
+            else:
+                width = self.crop[0][1] - self.crop[0][0]
+                height = self.crop[1][1] - self.crop[1][0]
+
+            final_shape = (height, width, num_channels)
+        if self.downscale is not None:
+            if isinstance(self.downscale, int):
+                final_shape = (final_shape[0] // self.downscale, final_shape[1] // self.downscale, num_channels)
+            else:
+                final_shape = (self.downscale[1], self.downscale[0], num_channels)
+
         self.action_space = spaces.Box(np.array([-1.0, -1.0]), np.array([1.0, 1.0]), dtype=np.float32)  # LR, UD
-        self.observation_space = spaces.Box(low=0, high=255, shape=(height, width, num_channels), dtype=np.uint8)
+        self.observation_space = spaces.Box(low=0, high=255, shape=final_shape, dtype=np.uint8)
         self.model_name = 'model_{mode}{use_depth}{flow}{uselast}'.format(mode='seg' if use_seg else ('gray' if grayscale else 'rgb'),
                                                            use_depth='_depth' if use_depth else '', flow='_flow' if use_flow else '',
                                                                           uselast='_uselastframe' if use_last_frame else '')
@@ -79,7 +98,7 @@ class CutterEnvBase(gym.Env):
             with open('default_options.pickle', 'rb') as fh:
                 opt = pickle.load(fh)
             opt.checkpoints_dir = os.path.join(model_path, 'checkpoints')
-            opt.name = 'pruning4_pix2pix'
+            opt.name = 'pruning_front_pix2pix'
             self.model = create_model(opt)
             self.model.setup(opt)
             # self.model.eval()
@@ -97,7 +116,7 @@ class CutterEnvBase(gym.Env):
         if img_buffer_size > 0:
             self.image_buffer = np.zeros((img_buffer_size, self.height, self.width, 3), dtype=np.uint8)
 
-        if self.use_gui:
+        if self.use_gui and self.use_plot_gui:
             plt.ion()
             self.fig = plt.figure()
             self.img_ax = self.fig.add_subplot(131)
@@ -118,13 +137,11 @@ class CutterEnvBase(gym.Env):
     def step(self, action):
         raise NotImplementedError()
 
-    def get_obs(self):
-        # Grab the new image observation
-        rgb_img, depth_img, seg_img = self.get_images()
+    def process_rgb_image(self, rgb_img):
 
         if self.use_net:
 
-            if self.use_gui:
+            if self.use_gui and self.use_plot_gui:
                 self.img_2.set_data(rgb_img)
 
             img_tensor = self.model_tf(Image.fromarray(rgb_img))
@@ -137,6 +154,35 @@ class CutterEnvBase(gym.Env):
                 output = torch.nn.functional.interpolate(output, size=(self.height, self.width))
 
             rgb_img = tensor2im(output)
+
+        if self.crop is not None:
+
+            if isinstance(self.crop[0], int):
+                crop_h, crop_v = self.crop
+                midpoint_v = self.height // 2
+                midpoint_h = self.width // 2
+                rgb_img = rgb_img[midpoint_v - crop_v:midpoint_v + crop_v,
+                                  midpoint_h - crop_h:midpoint_h + crop_h]
+            else:
+                rgb_img = rgb_img[self.crop[1][0]:self.crop[1][1],
+                                  self.crop[0][0]:self.crop[0][1]]
+
+        if self.downscale:
+            img = Image.fromarray(rgb_img)
+            if isinstance(self.downscale, int):
+                current_w = rgb_img.shape[1]
+                current_h = rgb_img.shape[0]
+                rgb_img = np.array(img.resize((current_w//self.downscale, current_h //self.downscale))).astype(np.uint8)
+            else:
+                rgb_img = np.array(img.resize(self.downscale)).astype(np.uint8)
+
+        return rgb_img
+
+
+    def get_obs(self):
+        # Grab the new image observation
+        rgb_img, depth_img, seg_img = self.get_images()
+        rgb_img = self.process_rgb_image(rgb_img)
 
         if self.image_buffer is not None:
             self.image_buffer[self.image_buffer_index] = rgb_img
@@ -183,7 +229,7 @@ class CutterEnvBase(gym.Env):
 
         self.last_grayscale = grayscale
 
-        if self.use_gui:
+        if self.use_gui and self.use_plot_gui:
             self.img.set_data(rgb_img)
             self.fig.canvas.draw()
             plt.pause(0.01)
@@ -204,10 +250,11 @@ class CutterEnvBase(gym.Env):
         self.img_ax.set_title(title)
 
     def set_action(self, action):
-        if self.arrow is not None:
-            self.arrow.remove()
-        self.arrow = self.action_ax.arrow(0, 0, action[0], action[1])
-        self.action_ax.set_title('{:.3f}, {:.3f}'.format(*action))
+        if self.use_gui and self.use_plot_gui:
+            if self.arrow is not None:
+                self.arrow.remove()
+            self.arrow = self.action_ax.arrow(0, 0, action[0], action[1])
+            self.action_ax.set_title('{:.3f}, {:.3f}'.format(*action))
 
 
 class CutterEnv(CutterEnvBase):
@@ -215,9 +262,10 @@ class CutterEnv(CutterEnvBase):
     metadata = {'render.modes': ['human']}
 
     def __init__(self, width, height, grayscale=False, use_net=False, use_seg=False, use_depth=False, use_flow=False, use_last_frame=False, max_vel=0.075, action_freq=24, max_elapsed_time=3.0,
-                 min_reward_dist=0.10, difficulty=0.0, eval=False, eval_count=None, use_gui=False, debug=False, img_buffer_size=0):
+                 min_reward_dist=0.10, difficulty=0.0, eval=False, eval_count=None, use_gui=False, crop=None,
+                 downscale=None, debug=False, img_buffer_size=0):
         super(CutterEnv, self).__init__(width, height, grayscale=grayscale, use_net=use_net, use_seg=use_seg, use_depth=use_depth, use_flow=use_flow, use_last_frame=use_last_frame,
-                                        use_gui=use_gui, img_buffer_size=img_buffer_size)
+                                        use_gui=use_gui, downscale=downscale, crop=crop, img_buffer_size=img_buffer_size)
 
         # Configuration parameters
         self.debug = debug
@@ -229,9 +277,8 @@ class CutterEnv(CutterEnvBase):
         self.min_reward_dist = min_reward_dist
         self.max_vel = max_vel
         self.current_camera_tf = np.identity(4)
-        self.mesh_num_points = 100
         self.accel_threshold = 0.50         # Vector magnitude where [X,Y] are in range [-1, 1]
-        self.accel_penalty = 0.50           # For every unit accel exceeding the threshold, reduce base reward by given proportion
+        self.accel_penalty = 0.0           # For every unit accel exceeding the threshold, reduce base reward by given proportion
         self.frames_per_img = 8             # Corresponds to 30 Hz
         self.fail_threshold = 0.0           # Experiment ends negatively if cutter passes Z-ax distance behind target
 
@@ -244,14 +291,11 @@ class CutterEnv(CutterEnvBase):
         self.approach_history = []          # Keeps track of best approach distances
         self.speed = max_vel
         self.elapsed_time = 0.0
-        self.in_mouth = False               # Is the branch currently inside of the cutter mouth?
-        self.failure = False                # Is the branch currently in the failure region?
         self.mesh_points = {}
         self.last_command = np.zeros(2)
         self.lighting = None                # Location of light source
         self.lighting_params = {}           # For feeding into getCameraImage (diffuse, color, etc.)
         self.contrast = None                # Contrast adjustment factor
-        self.accum_dist_reward = 0          # How much reward has been accumulated from distance closeness?
 
         self.eval_counter = 0               # [EVAL only] After the specified number of evaluations, reset the Numpy random seed
 
@@ -284,8 +328,11 @@ class CutterEnv(CutterEnvBase):
             farVal=10.0)
         # self.robot.attach_ghost_body_from_file('robots/ur5e/collision/cutter-mouth-collision.stl',
         #                                        'mouth', 'cutpoint', rpy=[0, 0, 3.1416])
-        self.robot.attach_ghost_body_from_file('robots/ur5e/collision/cutter-mouth-collision-shrunk.stl',
+        # self.robot.attach_ghost_body_from_file('robots/ur5e/collision/cutter-mouth-collision-shrunk.stl',
+        self.robot.attach_ghost_body_from_file('robots/ur5e/collision/mouth-full-extended.stl',
                                                'mouth', 'cutpoint', rpy=[0, 0, 0])
+        # self.robot.attach_ghost_body_from_file('robots/ur5e/collision/mouth-bonus.stl',
+        #                                        'bonus', 'cutpoint', rpy=[0, 0, 0])
         self.robot.attach_ghost_body_from_file('robots/ur5e/collision/cutter-failure-zone-new.stl',
                                                'failure', 'cutpoint', rpy=[0, 0, 0])
 
@@ -344,6 +391,10 @@ class CutterEnv(CutterEnvBase):
         # OTHER TEXTURES LIBRARY - LOADED IN THEIR RESPECTIVE FUNCTIONS
         self.canonical_textures = {}
         self.random_textures = []
+
+
+        # TESTING
+        self.robot.enable_force_torque_readings('wrist_3_link-tool0_fixed_joint')
 
         self.start_state = pb.saveState(physicsClientId=self.client_id)
 
@@ -412,19 +463,20 @@ class CutterEnv(CutterEnvBase):
                     print('[DEBUG] No improvement!')
         self.approach_history.append(abs(approach_dist))
 
-        # Compute collisions with ghost bodies, as well as current target position
-        tree_pts = self.tree_model_metadata[self.target_tree][self.target_id]['points']
-        self.in_mouth = self.robot.query_ghost_body_collision('mouth', tree_pts,
-                                                         point_frame_tf=base_tf, plot_debug=False)
-        self.failure = not self.in_mouth and \
-                       (approach_dist < -self.fail_threshold or self.robot.query_ghost_body_collision('failure', tree_pts, point_frame_tf=base_tf, plot_debug=False))
 
-        # Done conditions: Success, failed, time elapsed, cutter is in mouth and within threshold
-        done =  self.in_mouth \
-                or self.failure \
-                or (self.elapsed_time >= self.max_elapsed_time) \
-                or no_improvement
-        reward = self.get_reward(vel_command, done)
+        in_mouth = False
+        failure = False
+
+        if approach_dist < 0.065:        # Based on model size, this is the minimum dist before a collision can happen
+            tree_pts = self.tree_model_metadata[self.target_tree][self.target_id]['points']
+            in_mouth = self.robot.query_ghost_body_collision('mouth', tree_pts, point_frame_tf=base_tf, plot_debug=False)
+            if not in_mouth and self.robot.query_ghost_body_collision('failure', tree_pts, point_frame_tf=base_tf):
+                failure = True
+                if self.debug:
+                    print('[DEBUG] Entered failure region')
+
+        done = in_mouth or failure or (approach_dist < -self.fail_threshold) or (self.elapsed_time >= self.max_elapsed_time) or no_improvement
+        reward = self.get_reward(done, in_mouth)
 
         self.last_command = vel_command
         return self.get_obs(), reward, done, {}
@@ -500,34 +552,25 @@ class CutterEnv(CutterEnvBase):
         d = np.linalg.norm(np.array(target_loc) - np.array(cutter_loc))
         return d
 
-    def get_reward(self, command, done=False):
+    def get_reward(self, done=False, success=False):
 
-        in_mouth = self.in_mouth
-        failure = not in_mouth and self.failure
+        if self.debug and done:
+            if success:
 
-        if self.debug:
-            if in_mouth:
-                print('[DEBUG] Branch is in mouth, success!')
-            if failure:
-                print('[DEBUG] Branch has reached failure point!')
+                print('[DEBUG] Episode success!')
+            else:
+                print('[DEBUG] Episode has failed!')
 
         d = self.get_cutter_dist()
         dist_proportion = max(1 - d / self.min_reward_dist, 0.0)
-
         if done:
-            if in_mouth:
-                reward = (self.max_elapsed_time - self.elapsed_time) * dist_proportion
+            if success:
+                reward = self.max_elapsed_time - self.elapsed_time
             else:
                 reward = -self.max_elapsed_time
-
         else:
-            accel = np.linalg.norm(command - self.last_command)
-            accel_multiplier = 1.0 - max(0, accel - self.accel_threshold) * self.accel_penalty
-
             ts = self.action_freq / 240.0
-            dist_based_reward = dist_proportion * ts * (1.0 if in_mouth else 0.25)
-            reward = dist_based_reward * accel_multiplier
-            self.accum_dist_reward += dist_based_reward
+            reward = ts * dist_proportion
 
         if self.debug:
             print('Obtained reward: {:.3f}'.format(reward))
@@ -549,9 +592,6 @@ class CutterEnv(CutterEnvBase):
         #     print('Using seed {}'.format(new_seed))
 
         self.elapsed_time = 0.0
-        self.accum_dist_reward = 0.0
-        self.failure = False
-        self.in_mouth = False
         self.speed = self.max_vel if self.eval else np.random.uniform(self.max_vel * 0.5, self.max_vel)
         pb.restoreState(stateId=self.start_state, physicsClientId=self.client_id)
 
@@ -580,16 +620,17 @@ class CutterEnv(CutterEnvBase):
         dist_bounds = (dist_center - dev, dist_center + dev)
 
         easy_offset = 0.01
-        hard_offset = 0.05
+        hard_offset = 0.025
         offset = easy_offset + (hard_offset - easy_offset) * self.difficulty
         if self.eval:
             offset = offset * 0.75
-        offset_bounds = (-offset, offset)
+        offset_bounds = (-offset - 0.015, offset)
 
         # Convert to world pose and then solve for the IKs
         tf = pose_to_tf(self.target_pose[:3], self.target_pose[3:])
         offset = np.array([np.random.uniform(*offset_bounds),
-                           np.random.uniform(*offset_bounds),
+                           np.random.uniform(*offset_bounds) * 1.5,
+                           # np.random.uniform(-0.02, -0.01),
                            np.random.uniform(*dist_bounds)])
         cutter_start_pos = homog_tf(tf, offset)
 
@@ -613,18 +654,28 @@ class CutterEnv(CutterEnvBase):
         tool_tf = self.robot.get_link_kinematics('wrist_3_link-tool0_fixed_joint', as_matrix=True)
         deg_noise = 0 if self.eval else (0.5 + 4.5 * self.difficulty)
 
-        pan_offset_pairs = [
-            (-30, np.array([0,0,0])),
-            (-22.5, np.array([-0.0338, 0, -0.025])),
-            (-15, np.array([-0.0676, 0, -0.05]))
-        ]
+        # pan_offset_pairs = [
+        #     (-30, np.array([0,0,0])),
+        #     (-22.5, np.array([-0.0338, 0, -0.025])),
+        #     (-15, np.array([-0.0676, 0, -0.05]))
+        # ]
+        #
+        # base_pan, base_offset = pan_offset_pairs[2]
 
-        base_pan, base_offset = pan_offset_pairs[2]
-        # base_pan, base_offset = pan_offset_pairs[np.random.choice(len(pan_offset_pairs))]
-        xyz_offset = base_offset + np.random.uniform(-1, 1, 3) * np.array([0.01, 0.01, 0.02])
+        #
+        #
+        # # base_pan, base_offset = pan_offset_pairs[np.random.choice(len(pan_offset_pairs))]
+        # xyz_offset = base_offset + np.random.uniform(-1, 1, 3) * np.array([0.01, 0.01, 0.02])
+        #
+        # pan = np.radians(np.random.uniform(base_pan - deg_noise, base_pan + deg_noise))
 
-        pan = np.radians(np.random.uniform(base_pan - deg_noise, base_pan + deg_noise))
-        ideal_view_matrix = camera_util.get_view_matrix(pan, xyz_offset, base_tf=tool_tf)
+        pan = np.radians(np.random.uniform(-3, 3))
+        # tilt = np.radians(np.random.uniform(-2.5, 7.5))
+        tilt = np.radians(10.0 + np.random.uniform(-2.0, 2.0))
+        # xyz_offset = np.random.uniform(-1, 1, 3) * np.array([0.01, 0.005, 0.01 ])
+        xyz_offset = np.zeros(3)
+
+        ideal_view_matrix = camera_util.get_view_matrix(pan, tilt, xyz_offset, base_tf=tool_tf)
         ideal_tool_camera_tf = np.linalg.inv(tool_tf) @ np.linalg.inv(ideal_view_matrix)
 
         # Perturb the tool-camera TF
@@ -813,9 +864,10 @@ if __name__ == '__main__':
 
     action = 'eval'
     # action = 'train'
-    use_trained = True
+    use_trained = False
+    train_use_pretrained = True
     difficulty = 1.0
-    model_difficulty = 0.5
+    model_difficulty = 1.0
     # model_difficulty = difficulty
     width = 424
     height = 240
@@ -825,6 +877,8 @@ if __name__ == '__main__':
     use_depth = False
     use_flow = False
     use_last_frame = False
+    crop = (120, 60)
+    downscale = 2
     num_envs = 3
     record = False
     variance_debug = False
@@ -837,8 +891,8 @@ if __name__ == '__main__':
     if action == 'train':
         def make_env(monitor=False, with_gui=False, eval=False, eval_count=None):
             env = CutterEnv(width, height, grayscale=grayscale, use_net=use_net, use_seg=use_seg, use_depth=use_depth, use_flow=use_flow,
-                             use_last_frame=use_last_frame, use_gui=with_gui, max_elapsed_time=2.5, max_vel=0.10, difficulty=0.0, debug=False,
-                            eval=eval, eval_count=eval_count)
+                             use_last_frame=use_last_frame, use_gui=with_gui, max_elapsed_time=1.0, max_vel=0.75, difficulty=0.0, debug=False,
+                            eval=eval, eval_count=eval_count, crop=crop, downscale=downscale)
             if monitor:
                 env = Monitor(env)
             return env
@@ -850,10 +904,15 @@ if __name__ == '__main__':
         batch_size = 60
 
         model = PPO("CnnPolicy", env, batch_size=batch_size, n_steps=n_steps, verbose=1, device='auto')
+        if train_use_pretrained:
+            print('Loading pre-trained network...')
+            net = model.policy
+            net.load_state_dict(torch.load('pretrained_agent.weights'))
 
         print('Learning...')
-        difficulties = [0.0, 0.25, 0.5, 0.75, 1.0]
-        steps_per_difficulty = 15000
+        # difficulties = [0.0, 0.25, 0.5, 0.75, 1.0]
+        difficulties = [1.0]
+        steps_per_difficulty = 100020
         for i, difficulty in enumerate(difficulties):
             difficulty_str = str(difficulty).replace('.', '_')
             model_file = f'best_model_{difficulty_str}.zip'
@@ -868,7 +927,7 @@ if __name__ == '__main__':
                                              deterministic=True, render=False)
                 model.learn(total_timesteps=steps_per_difficulty, callback=eval_callback)
                 os.rename('evaluations.npz', f'evaluations_{difficulty_str}.npz')
-                os.rename('best_model.zip', f'best_model_{difficulty_str}.zip')
+                os.rename('best_model_1_0_fullsize.zip', f'best_model_{difficulty_str}.zip')
             else:
                 print('Difficulty {} has already been learned!'.format(difficulty))
             model = model.load(f'best_model_{difficulty_str}.zip', env=env)
@@ -879,13 +938,12 @@ if __name__ == '__main__':
 
         # env = CutterEnv(159, 90, use_seg=use_seg, use_depth=use_depth, use_gui=True, max_elapsed_time=2.5, max_vel=0.05, debug=True)
         env = CutterEnv(width, height, grayscale=grayscale, use_net=use_net, use_seg=use_seg, use_depth=use_depth, use_flow=use_flow, use_last_frame=use_last_frame,
-                        use_gui=True, max_elapsed_time=2.5, max_vel=0.10, debug=True, img_buffer_size=buffer_size,
-                        eval=True, eval_count=None, difficulty=difficulty)
+                        use_gui=True, max_elapsed_time=1.0, max_vel=0.30, debug=True, img_buffer_size=buffer_size,
+                        eval=True, eval_count=None, difficulty=difficulty, crop=crop, downscale=downscale)
         model = PPO("CnnPolicy", env, verbose=1)
-        # model_file = '{}.model'.format(env.model_name)
         if use_trained:
             diff_str = str(model_difficulty).replace('.', '_')
-            model_file = 'best_model_{}.zip'.format(diff_str)
+            model_file = 'best_model_{}_midpoint.zip'.format(diff_str)
             if os.path.exists(model_file):
                 model = model.load(model_file)
                 print('Using best model!')
@@ -900,7 +958,7 @@ if __name__ == '__main__':
                         check_input_variance(model, obs, output=True)
                 else:
                     # action = env.action_space.sample()
-                    action = np.array([1.0, 0.0])
+                    action = np.array([0.0, -0.1])
 
                 env.set_action(action)
                 action_hist.append(action)
