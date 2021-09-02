@@ -40,14 +40,14 @@ if __name__ == '__main__':
         file_pref = '{}_'.format(args[1])
 
     env = CutterEnv(width, height, grayscale=grayscale, use_seg=use_seg, use_depth=use_depth, use_flow=use_flow,
-                    use_last_frame=use_last_frame, use_gui=False, max_elapsed_time=1.0, max_vel=0.05, debug=True,
+                    use_last_frame=use_last_frame, use_gui=False, max_elapsed_time=1.0, max_vel=0.30, debug=True,
                     eval=False, difficulty=1.0)
     obs = env.reset()
     all_dists = []
     for i in range(timesteps):
         action = env.action_space.sample()
         obs, reward, done, info = env.step(action, realtime=False)
-        env.randomize_camera()
+        env.randomize_camera(large_randomize=True)
 
 
         random_img, _, _ = env.set_random()

@@ -98,7 +98,7 @@ class CutterEnvBase(gym.Env):
             with open('default_options.pickle', 'rb') as fh:
                 opt = pickle.load(fh)
             opt.checkpoints_dir = os.path.join(model_path, 'checkpoints')
-            opt.name = 'pruning_front_pix2pix'
+            opt.name = 'pruning_topmount_pix2pix'
             self.model = create_model(opt)
             self.model.setup(opt)
             # self.model.eval()
@@ -475,7 +475,7 @@ class CutterEnv(CutterEnvBase):
                 if self.debug:
                     print('[DEBUG] Entered failure region')
 
-        done = in_mouth or failure or (approach_dist < -self.fail_threshold) or (self.elapsed_time >= self.max_elapsed_time) or no_improvement
+        done = in_mouth or failure or (approach_dist < -self.fail_threshold) or (self.elapsed_time >= self.max_elapsed_time - 0.0001) or no_improvement
         reward = self.get_reward(done, in_mouth)
 
         self.last_command = vel_command
@@ -650,30 +650,19 @@ class CutterEnv(CutterEnvBase):
         print('Last dist: {:.3f}'.format(self.get_cutter_dist()))
 
 
-    def randomize_camera(self):
+    def randomize_camera(self, large_randomize=False):
         tool_tf = self.robot.get_link_kinematics('wrist_3_link-tool0_fixed_joint', as_matrix=True)
-        deg_noise = 0 if self.eval else (0.5 + 4.5 * self.difficulty)
 
-        # pan_offset_pairs = [
-        #     (-30, np.array([0,0,0])),
-        #     (-22.5, np.array([-0.0338, 0, -0.025])),
-        #     (-15, np.array([-0.0676, 0, -0.05]))
-        # ]
-        #
-        # base_pan, base_offset = pan_offset_pairs[2]
+        if large_randomize:
+            pan_bounds = (-10, 10)
+            tilt_bounds = (-5, 5)
+        else:
+            pan_bounds = (-3, 3)
+            tilt_bounds = (-2, 2)
 
-        #
-        #
-        # # base_pan, base_offset = pan_offset_pairs[np.random.choice(len(pan_offset_pairs))]
-        # xyz_offset = base_offset + np.random.uniform(-1, 1, 3) * np.array([0.01, 0.01, 0.02])
-        #
-        # pan = np.radians(np.random.uniform(base_pan - deg_noise, base_pan + deg_noise))
-
-        pan = np.radians(np.random.uniform(-3, 3))
-        # tilt = np.radians(np.random.uniform(-2.5, 7.5))
-        tilt = np.radians(10.0 + np.random.uniform(-2.0, 2.0))
-        # xyz_offset = np.random.uniform(-1, 1, 3) * np.array([0.01, 0.005, 0.01 ])
-        xyz_offset = np.zeros(3)
+        pan = np.radians(np.random.uniform(*pan_bounds))
+        tilt = np.radians(10.0 + np.random.uniform(*tilt_bounds))
+        xyz_offset = np.random.uniform(-1, 1, 3) * np.array([0.01, 0.005, 0.01 ])
 
         ideal_view_matrix = camera_util.get_view_matrix(pan, tilt, xyz_offset, base_tf=tool_tf)
         ideal_tool_camera_tf = np.linalg.inv(tool_tf) @ np.linalg.inv(ideal_view_matrix)
@@ -864,8 +853,8 @@ if __name__ == '__main__':
 
     action = 'eval'
     # action = 'train'
-    use_trained = False
-    train_use_pretrained = True
+    use_trained = True
+    train_use_pretrained = False
     difficulty = 1.0
     model_difficulty = 1.0
     # model_difficulty = difficulty
@@ -877,12 +866,12 @@ if __name__ == '__main__':
     use_depth = False
     use_flow = False
     use_last_frame = False
-    crop = (120, 60)
-    downscale = 2
+    crop = ((64, 424), (60, 240))
+    downscale = (160, 80)
     num_envs = 3
     record = False
     variance_debug = False
-    train_eval_count = 12
+    train_eval_count = 16
 
     model_name = 'model_{w}_{h}{g}{s}{d}{f}{l}.zip'.format(w=width, h=height, g='_grayscale' if grayscale else '',
                                                        s='_seg' if use_seg else '', d='_depth' if use_depth else '',
@@ -891,7 +880,7 @@ if __name__ == '__main__':
     if action == 'train':
         def make_env(monitor=False, with_gui=False, eval=False, eval_count=None):
             env = CutterEnv(width, height, grayscale=grayscale, use_net=use_net, use_seg=use_seg, use_depth=use_depth, use_flow=use_flow,
-                             use_last_frame=use_last_frame, use_gui=with_gui, max_elapsed_time=1.0, max_vel=0.75, difficulty=0.0, debug=False,
+                             use_last_frame=use_last_frame, use_gui=with_gui, max_elapsed_time=1.0, max_vel=0.30, difficulty=1.0, debug=False,
                             eval=eval, eval_count=eval_count, crop=crop, downscale=downscale)
             if monitor:
                 env = Monitor(env)
@@ -927,7 +916,7 @@ if __name__ == '__main__':
                                              deterministic=True, render=False)
                 model.learn(total_timesteps=steps_per_difficulty, callback=eval_callback)
                 os.rename('evaluations.npz', f'evaluations_{difficulty_str}.npz')
-                os.rename('best_model_1_0_fullsize.zip', f'best_model_{difficulty_str}.zip')
+                os.rename('best_model.zip', f'best_model_{difficulty_str}.zip')
             else:
                 print('Difficulty {} has already been learned!'.format(difficulty))
             model = model.load(f'best_model_{difficulty_str}.zip', env=env)
@@ -938,12 +927,12 @@ if __name__ == '__main__':
 
         # env = CutterEnv(159, 90, use_seg=use_seg, use_depth=use_depth, use_gui=True, max_elapsed_time=2.5, max_vel=0.05, debug=True)
         env = CutterEnv(width, height, grayscale=grayscale, use_net=use_net, use_seg=use_seg, use_depth=use_depth, use_flow=use_flow, use_last_frame=use_last_frame,
-                        use_gui=True, max_elapsed_time=1.0, max_vel=0.30, debug=True, img_buffer_size=buffer_size,
+                        use_gui=True, max_elapsed_time=2.5, max_vel=0.10, debug=True, img_buffer_size=buffer_size,
                         eval=True, eval_count=None, difficulty=difficulty, crop=crop, downscale=downscale)
         model = PPO("CnnPolicy", env, verbose=1)
         if use_trained:
             diff_str = str(model_difficulty).replace('.', '_')
-            model_file = 'best_model_{}_midpoint.zip'.format(diff_str)
+            model_file = 'best_model_{}.zip'.format(diff_str)
             if os.path.exists(model_file):
                 model = model.load(model_file)
                 print('Using best model!')
